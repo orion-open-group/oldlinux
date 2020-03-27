@@ -12,10 +12,10 @@
 #include <linux/config.h>
 #include <asm/segment.h>
 #include <sys/times.h>
-#include <sys/utsname.h>
+#include <linux/utsname.h>
 #include <sys/param.h>
 #include <sys/resource.h>
-#include <string.h>
+#include <linux/string.h>
 
 /*
  * this indicates wether you can reboot with ctrl-alt-del: the deault is yes
@@ -29,6 +29,79 @@ static int C_A_D = 1;
 struct timezone sys_tz = { 0, 0};
 
 extern int session_of_pgrp(int pgrp);
+
+#define	PZERO	15
+
+static int proc_sel(struct task_struct *p, int which, int who)
+{
+	switch (which) {
+		case PRIO_PROCESS:
+			if (!who && p == current)
+				return 1;
+			return(p->pid == who);
+		case PRIO_PGRP:
+			if (!who)
+				who = current->pgrp;
+			return(p->pgrp == who);
+		case PRIO_USER:
+			if (!who)
+				who = current->uid;
+			return(p->uid == who);
+	}
+	return 0;
+}
+
+int sys_setpriority(int which, int who, int niceval)
+{
+	struct task_struct **p;
+	int error = ESRCH;
+	int priority;
+
+	if (which > 2 || which < 0)
+		return -EINVAL;
+
+	if ((priority = PZERO - niceval) <= 0)
+		priority = 1;
+
+	for(p = &LAST_TASK; p > &FIRST_TASK; --p) {
+		if (!*p || !proc_sel(*p, which, who))
+			continue;
+		if ((*p)->uid != current->euid &&
+			(*p)->uid != current->uid && !suser()) {
+			error = EPERM;
+			continue;
+		}
+		if (error == ESRCH)
+			error = 0;
+		if (priority > (*p)->priority && !suser())
+			error = EACCES;
+		else
+			(*p)->priority = priority;
+	}
+	return -error;
+}
+
+int sys_getpriority(int which, int who)
+{
+	struct task_struct **p;
+	int max_prio = 0;
+
+	if (which > 2 || which < 0)
+		return -EINVAL;
+
+	for(p = &LAST_TASK; p > &FIRST_TASK; --p) {
+		if (!*p || !proc_sel(*p, which, who))
+			continue;
+		if ((*p)->priority > max_prio)
+			max_prio = (*p)->priority;
+	}
+	return(max_prio ? max_prio : -ESRCH);
+}
+
+int sys_profil()
+{
+	return -ENOSYS;
+}
 
 int sys_ftime()
 {
@@ -91,6 +164,9 @@ void ctrl_alt_del(void)
 {
 	if (C_A_D)
 		hard_reset_now();
+	else
+		if (task[1])
+			send_sig(SIGINT,task[1],1);
 }
 	
 
@@ -107,14 +183,14 @@ void ctrl_alt_del(void)
  */
 int sys_setregid(int rgid, int egid)
 {
-	if (rgid>0) {
+	if (rgid >= 0) {
 		if ((current->gid == rgid) || 
 		    suser())
 			current->gid = rgid;
 		else
 			return(-EPERM);
 	}
-	if (egid>0) {
+	if (egid >= 0) {
 		if ((current->gid == egid) ||
 		    (current->egid == egid) ||
 		    suser()) {
@@ -194,17 +270,17 @@ int sys_setreuid(int ruid, int euid)
 {
 	int old_ruid = current->uid;
 	
-	if (ruid>0) {
+	if (ruid >= 0) {
 		if ((current->euid==ruid) ||
-                    (old_ruid == ruid) ||
+		    (old_ruid == ruid) ||
 		    suser())
 			current->uid = ruid;
 		else
 			return(-EPERM);
 	}
-	if (euid>0) {
+	if (euid >= 0) {
 		if ((old_ruid == euid) ||
-                    (current->euid == euid) ||
+		    (current->euid == euid) ||
 		    suser()) {
 			current->euid = euid;
 			current->suid = euid;
@@ -370,18 +446,34 @@ int in_group_p(gid_t grp)
 	return 0;
 }
 
-static struct utsname thisname = {
+static struct new_utsname thisname = {
 	UTS_SYSNAME, UTS_NODENAME, UTS_RELEASE, UTS_VERSION, UTS_MACHINE
 };
 
-int sys_uname(struct utsname * name)
+int sys_newuname(struct new_utsname * name)
 {
-	int i;
+	if (!name)
+		return -EFAULT;
+	verify_area(name, sizeof *name);
+	memcpy_tofs(name,&thisname,sizeof *name);
+	return 0;
+}
 
-	if (!name) return -ERROR;
+int sys_uname(struct old_utsname * name)
+{
+	if (!name)
+		return -EINVAL;
 	verify_area(name,sizeof *name);
-	for(i=0;i<sizeof *name;i++)
-		put_fs_byte(((char *) &thisname)[i],i+(char *) name);
+	memcpy_tofs(&name->sysname,&thisname.sysname,__OLD_UTS_LEN);
+	put_fs_byte(0,name->sysname+__OLD_UTS_LEN);
+	memcpy_tofs(&name->nodename,&thisname.nodename,__OLD_UTS_LEN);
+	put_fs_byte(0,name->nodename+__OLD_UTS_LEN);
+	memcpy_tofs(&name->release,&thisname.release,__OLD_UTS_LEN);
+	put_fs_byte(0,name->release+__OLD_UTS_LEN);
+	memcpy_tofs(&name->version,&thisname.version,__OLD_UTS_LEN);
+	put_fs_byte(0,name->version+__OLD_UTS_LEN);
+	memcpy_tofs(&name->machine,&thisname.machine,__OLD_UTS_LEN);
+	put_fs_byte(0,name->machine+__OLD_UTS_LEN);
 	return 0;
 }
 
@@ -394,15 +486,13 @@ int sys_sethostname(char *name, int len)
 	
 	if (!suser())
 		return -EPERM;
-	if (len > MAXHOSTNAMELEN)
+	if (len > __NEW_UTS_LEN)
 		return -EINVAL;
 	for (i=0; i < len; i++) {
 		if ((thisname.nodename[i] = get_fs_byte(name+i)) == 0)
-			break;
+			return 0;
 	}
-	if (thisname.nodename[i]) {
-		thisname.nodename[i>MAXHOSTNAMELEN ? MAXHOSTNAMELEN : i] = 0;
-	}
+	thisname.nodename[i] = 0;
 	return 0;
 }
 
@@ -457,11 +547,15 @@ int sys_getrusage(int who, struct rusage *ru)
 		r.ru_utime.tv_usec = CT_TO_USECS(current->utime);
 		r.ru_stime.tv_sec = CT_TO_SECS(current->stime);
 		r.ru_stime.tv_usec = CT_TO_USECS(current->stime);
+		r.ru_minflt = current->min_flt;
+		r.ru_majflt = current->maj_flt;
 	} else {
 		r.ru_utime.tv_sec = CT_TO_SECS(current->cutime);
 		r.ru_utime.tv_usec = CT_TO_USECS(current->cutime);
 		r.ru_stime.tv_sec = CT_TO_SECS(current->cstime);
 		r.ru_stime.tv_usec = CT_TO_USECS(current->cstime);
+		r.ru_minflt = current->cmin_flt;
+		r.ru_majflt = current->cmaj_flt;
 	}
 	lp = (unsigned long *) &r;
 	lpend = (unsigned long *) (&r+1);

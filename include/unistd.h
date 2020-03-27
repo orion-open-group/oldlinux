@@ -50,6 +50,12 @@
 #define _PC_VDISABLE		8
 #define _PC_CHOWN_RESTRICTED	9
 
+#if 0
+/* XXX - <sys/stat.h> illegally <sys/types.h> already.
+ * The rest of these includes are also illegal (too much pollution).
+ */
+#include <sys/types.h>
+#endif
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/times.h>
@@ -58,167 +64,33 @@
 #include <utime.h>
 
 #ifdef __LIBRARY__
-
-#define __NR_setup	0	/* used only by init, to get system going */
-#define __NR_exit	1
-#define __NR_fork	2
-#define __NR_read	3
-#define __NR_write	4
-#define __NR_open	5
-#define __NR_close	6
-#define __NR_waitpid	7
-#define __NR_creat	8
-#define __NR_link	9
-#define __NR_unlink	10
-#define __NR_execve	11
-#define __NR_chdir	12
-#define __NR_time	13
-#define __NR_mknod	14
-#define __NR_chmod	15
-#define __NR_chown	16
-#define __NR_break	17
-#define __NR_stat	18
-#define __NR_lseek	19
-#define __NR_getpid	20
-#define __NR_mount	21
-#define __NR_umount	22
-#define __NR_setuid	23
-#define __NR_getuid	24
-#define __NR_stime	25
-#define __NR_ptrace	26
-#define __NR_alarm	27
-#define __NR_fstat	28
-#define __NR_pause	29
-#define __NR_utime	30
-#define __NR_stty	31
-#define __NR_gtty	32
-#define __NR_access	33
-#define __NR_nice	34
-#define __NR_ftime	35
-#define __NR_sync	36
-#define __NR_kill	37
-#define __NR_rename	38
-#define __NR_mkdir	39
-#define __NR_rmdir	40
-#define __NR_dup	41
-#define __NR_pipe	42
-#define __NR_times	43
-#define __NR_prof	44
-#define __NR_brk	45
-#define __NR_setgid	46
-#define __NR_getgid	47
-#define __NR_signal	48
-#define __NR_geteuid	49
-#define __NR_getegid	50
-#define __NR_acct	51
-#define __NR_phys	52
-#define __NR_lock	53
-#define __NR_ioctl	54
-#define __NR_fcntl	55
-#define __NR_mpx	56
-#define __NR_setpgid	57
-#define __NR_ulimit	58
-#define __NR_uname	59
-#define __NR_umask	60
-#define __NR_chroot	61
-#define __NR_ustat	62
-#define __NR_dup2	63
-#define __NR_getppid	64
-#define __NR_getpgrp	65
-#define __NR_setsid	66
-#define __NR_sigaction	67
-#define __NR_sgetmask	68
-#define __NR_ssetmask	69
-#define __NR_setreuid	70
-#define __NR_setregid	71
-#define __NR_sigsuspend	72
-#define __NR_sigpending 73
-#define __NR_sethostname 74
-#define __NR_setrlimit	75
-#define __NR_getrlimit	76
-#define __NR_getrusage	77
-#define __NR_gettimeofday 78
-#define __NR_settimeofday 79
-#define __NR_getgroups	80
-#define __NR_setgroups	81
-#define __NR_select	82
-#define __NR_symlink	83
-#define __NR_lstat	84
-#define __NR_readlink	85
-#define __NR_uselib	86
-#define __NR_swapon	87
-#define __NR_reboot	88
-
-#define _syscall0(type,name) \
-type name(void) \
-{ \
-long __res; \
-__asm__ volatile ("int $0x80" \
-	: "=a" (__res) \
-	: "0" (__NR_##name)); \
-if (__res >= 0) \
-	return (type) __res; \
-errno = -__res; \
-return -1; \
-}
-
-#define _syscall1(type,name,atype,a) \
-type name(atype a) \
-{ \
-long __res; \
-__asm__ volatile ("movl %2,%%ebx\n\t" \
-	"int $0x80" \
-	: "=a" (__res) \
-	: "0" (__NR_##name),"g" ((long)(a)):"bx"); \
-if (__res >= 0) \
-	return (type) __res; \
-errno = -__res; \
-return -1; \
-}
-
-#define _syscall2(type,name,atype,a,btype,b) \
-type name(atype a,btype b) \
-{ \
-long __res; \
-__asm__ volatile ("movl %2,%%ebx\n\t" \
-	"int $0x80" \
-	: "=a" (__res) \
-	: "0" (__NR_##name),"g" ((long)(a)),"c" ((long)(b)):"bx"); \
-if (__res >= 0) \
-	return (type) __res; \
-errno = -__res; \
-return -1; \
-}
-
-#define _syscall3(type,name,atype,a,btype,b,ctype,c) \
-type name(atype a,btype b,ctype c) \
-{ \
-long __res; \
-__asm__ volatile ("movl %2,%%ebx\n\t" \
-	"int $0x80" \
-	: "=a" (__res) \
-	: "0" (__NR_##name),"g" ((long)(a)),"c" ((long)(b)),"d" ((long)(c)):"bx"); \
-if (__res>=0) \
-	return (type) __res; \
-errno=-__res; \
-return -1; \
-}
-
+#include <linux/unistd.h>
 #endif /* __LIBRARY__ */
 
+/* XXX - illegal. */
 extern int errno;
 
-int access(const char * filename, mode_t mode);
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* XXX - several non-POSIX functions here, and POSIX functions that are
+ * supposed to be declared elsewhere.  Non-promotion of short types in
+ * prototypes may cause trouble.  Arg names should be prefixed by
+ * underscores.
+ */
+int access(const char * filename, mode_t mode);	/* XXX - short type */
 int acct(const char * filename);
-int alarm(int sec);
 int brk(void * end_data_segment);
+/* XXX - POSIX says unsigned alarm(unsigned sec) */
+int alarm(int sec);
 void * sbrk(ptrdiff_t increment);
 int chdir(const char * filename);
-int chmod(const char * filename, mode_t mode);
-int chown(const char * filename, uid_t owner, gid_t group);
+int chmod(const char * filename, mode_t mode);	/* XXX - short type */
+int chown(const char * filename, uid_t owner, gid_t group); /* XXX - shorts */
 int chroot(const char * filename);
 int close(int fildes);
-int creat(const char * filename, mode_t mode);
+int creat(const char * filename, mode_t mode);	/* XXX - short type */
 int dup(int fildes);
 int execve(const char * filename, char ** argv, char ** envp);
 int execv(const char * pathname, char ** argv);
@@ -229,27 +101,28 @@ int execle(const char * pathname, char * arg0, ...);
 volatile void exit(int status);
 volatile void _exit(int status);
 int fcntl(int fildes, int cmd, ...);
-int fork(void);
-int getpid(void);
-int getuid(void);
-int geteuid(void);
-int getgid(void);
-int getegid(void);
+pid_t fork(void);
+pid_t getpid(void);
+uid_t getuid(void);
+uid_t geteuid(void);
+gid_t getgid(void);
+gid_t getegid(void);
 int ioctl(int fildes, int cmd, ...);
 int kill(pid_t pid, int signal);
 int link(const char * filename1, const char * filename2);
-int lseek(int fildes, off_t offset, int origin);
-int mknod(const char * filename, mode_t mode, dev_t dev);
-int mount(const char * specialfile, const char * dir, int rwflag);
+off_t lseek(int fildes, off_t offset, int origin);
+int mknod(const char * filename, mode_t mode, dev_t dev); /* XXX - shorts */
+int mount(const char * specialfile, const char * dir, const char * type, int rwflag);
 int nice(int val);
 int open(const char * filename, int flag, ...);
 int pause(void);
 int pipe(int * fildes);
+/* XXX**2 - POSIX says unsigned count */
 int read(int fildes, char * buf, off_t count);
 int setpgrp(void);
-int setpgid(pid_t pid,pid_t pgid);
-int setuid(uid_t uid);
-int setgid(gid_t gid);
+int setpgid(pid_t pid,pid_t pgid);	/* XXX - short types */
+int setuid(uid_t uid);		/* XXX - short type */
+int setgid(gid_t gid);		/* XXX - short type */
 void (*signal(int sig, void (*fn)(int)))(int);
 int stat(const char * filename, struct stat * stat_buf);
 int fstat(int fildes, struct stat * stat_buf);
@@ -266,6 +139,7 @@ int ustat(dev_t dev, struct ustat * ubuf);
 int utime(const char * filename, struct utimbuf * times);
 pid_t waitpid(pid_t pid,int * wait_stat,int options);
 pid_t wait(int * wait_stat);
+/* XXX**2 - POSIX says unsigned count */
 int write(int fildes, const char * buf, off_t count);
 int dup2(int oldfd, int newfd);
 int getppid(void);
@@ -282,4 +156,9 @@ int setgroups(int gidsetlen, gid_t *gidset);
 int select(int width, fd_set * readfds, fd_set * writefds,
 	fd_set * exceptfds, struct timeval * timeout);
 int swapon(const char * specialfile);
+
+#ifdef __cplusplus
+}
+#endif
+
 #endif

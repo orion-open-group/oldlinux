@@ -3,8 +3,6 @@
 
 #include <sys/types.h>
 
-#define TTY_BUF_SIZE 1024
-
 /* 0x54 is just a magic number to make these relatively uniqe ('T') */
 
 #define TCGETS		0x5401
@@ -36,6 +34,9 @@
 #define FIONREAD	0x541B
 #define TIOCINQ		FIONREAD
 #define TIOCLINUX	0x541C
+#define TIOCCONS	0x541D
+#define TIOCGSERIAL	0x541E
+#define TIOCSSERIAL	0x541F
 
 struct winsize {
 	unsigned short ws_row;
@@ -212,6 +213,10 @@ struct termios {
 #define	TCSADRAIN	1
 #define	TCSAFLUSH	2
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 extern speed_t cfgetispeed(struct termios *termios_p);
 extern speed_t cfgetospeed(struct termios *termios_p);
 extern int cfsetispeed(struct termios *termios_p, speed_t speed);
@@ -223,5 +228,9 @@ extern int tcgetattr(int fildes, struct termios *termios_p);
 extern int tcsendbreak(int fildes, int duration);
 extern int tcsetattr(int fildes, int optional_actions,
 	struct termios *termios_p);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

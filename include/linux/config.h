@@ -1,22 +1,25 @@
 #ifndef _CONFIG_H
 #define _CONFIG_H
 
-/*
- * Define this if you want the math-emulation code: if this is undefined,
- * the kernel will be smaller, but you'll get FPU exceptions if you don't
- * have a 387 and are trying to use math.
- */
-
-#define KERNEL_MATH_EMULATION
-
+#define CONFIG_DISTRIBUTION
 
 /*
  * Defines for what uname() should return 
  */
+#ifndef UTS_SYSNAME
 #define UTS_SYSNAME "Linux"
+#endif
+#ifndef UTS_NODENAME
 #define UTS_NODENAME "(none)"	/* set by sethostname() */
-#define UTS_RELEASE "0"		/* patchlevel */
-#define UTS_VERSION "0.12"
+#endif
+#include <linux/config_rel.h>
+#ifndef UTS_RELEASE
+#define UTS_RELEASE "0.95c-0" 
+#endif
+#include <linux/config_ver.h>
+#ifndef UTS_VERSION
+#define UTS_VERSION "mm/dd/yy"
+#endif
 #define UTS_MACHINE "i386"	/* hardware type */
 
 /* Don't touch these, unless you really know what your doing. */
@@ -60,5 +63,53 @@
  If you want the BIOS to tell what kind of drive you have, just
  leave HD_TYPE undefined. This is the normal thing to do.
 */
+
+#undef HD_TYPE
+
+#undef CONFIG_BLK_DEV_SD
+#undef CONFIG_BLK_DEV_ST
+
+/*
+	Choose supported SCSI adapters here.
+*/
+
+#undef CONFIG_SCSI_AHA1542
+#undef CONFIG_SCSI_ALWAYS
+#undef CONFIG_SCSI_CSC
+#undef CONFIG_SCSI_DTC
+#undef CONFIG_SCSI_FUTURE_DOMAIN
+#undef CONFIG_SCSI_SEAGATE
+#undef CONFIG_SCSI_ULTRASTOR
+
+#if defined(CONFIG_BLK_DEV_SD) || defined(CONFIG_BLK_DEV_ST)
+	#ifndef CONFIG_SCSI
+		#define CONFIG_SCSI
+	#endif
+	
+	#if !defined(CONFIG_SCSI_AHA1542) && !defined(CONFIG_SCSI_CSC) && !defined(CONFIG_SCSI_DTC) && \
+		!defined(CONFIG_SCSI_FUTURE_DOMAIN) &&  !defined(CONFIG_SCSI_SEAGATE) && !defined(CONFIG_SCSI_ULTRASTOR) 
+
+	#error  Error : SCSI devices enabled, but no low level drivers have been enabled.
+	#endif
+#endif
+
+#ifdef CONFIG_DISTRIBUTION
+	#include <linux/config.dist.h>
+#else
+	#include <linux/config.site.h>
+#endif
+
+/*
+	File type specific stuff goes into this.
+*/
+
+#ifdef ASM_SRC
+#endif
+
+#ifdef C_SRC
+#endif
+
+#ifdef MAKE
+#endif
 
 #endif

@@ -1,21 +1,21 @@
-AR	=ar
-AS	=as
-CC	=gcc
-LD	=ld
-CFLAGS	=-Wall -O -fstrength-reduce -fomit-frame-pointer \
-	-nostdinc -I../../include
-CPP	=gcc -E -nostdinc -I../../include
+#
+# Makefile for the linux minix-filesystem routines.
+#
+# Note! Dependencies are done automagically by 'make dep', which also
+# removes any old dependencies. DON'T put your own dependencies here
+# unless it's something special (ie not a .c file).
+#
+# Note 2! The CFLAGS definitions are now in the main makefile...
 
 .c.s:
-	$(CC) $(CFLAGS) \
-	-S -o $*.s $<
+	$(CC) $(CFLAGS) -S $<
 .c.o:
-	$(CC) $(CFLAGS) \
-	-c -o $*.o $<
+	$(CC) $(CFLAGS) -c $<
 .s.o:
 	$(AS) -o $*.o $<
 
-OBJS=	minix_op.o bitmap.o truncate.o namei.o inode.o file_dev.o
+OBJS=	bitmap.o truncate.o namei.o inode.o \
+	file.o dir.o symlink.o blkdev.o chrdev.o fifo.o
 
 minix.o: $(OBJS)
 	$(LD) -r -o minix.o $(OBJS)
@@ -26,44 +26,78 @@ clean:
 
 dep:
 	sed '/\#\#\# Dependencies/q' < Makefile > tmp_make
-	(for i in *.c;do $(CPP) -M $$i;done) >> tmp_make
+	for i in *.c;do $(CPP) -M $$i;done >> tmp_make
 	cp tmp_make Makefile
 
 ### Dependencies:
-bitmap.o : bitmap.c ../../include/string.h ../../include/linux/sched.h \
-  ../../include/linux/head.h ../../include/linux/fs.h \
-  ../../include/sys/types.h ../../include/linux/mm.h \
-  ../../include/linux/kernel.h ../../include/signal.h \
-  ../../include/sys/param.h ../../include/sys/time.h ../../include/time.h \
-  ../../include/sys/resource.h ../../include/linux/minix_fs.h 
-file_dev.o : file_dev.c ../../include/errno.h ../../include/fcntl.h \
-  ../../include/sys/types.h ../../include/linux/sched.h \
-  ../../include/linux/head.h ../../include/linux/fs.h \
-  ../../include/linux/mm.h ../../include/linux/kernel.h \
-  ../../include/signal.h ../../include/sys/param.h ../../include/sys/time.h \
-  ../../include/time.h ../../include/sys/resource.h \
-  ../../include/linux/minix_fs.h ../../include/asm/segment.h 
-inode.o : inode.c ../../include/string.h ../../include/sys/stat.h \
-  ../../include/sys/types.h ../../include/linux/sched.h \
-  ../../include/linux/head.h ../../include/linux/fs.h \
-  ../../include/linux/mm.h ../../include/linux/kernel.h \
-  ../../include/signal.h ../../include/sys/param.h ../../include/sys/time.h \
-  ../../include/time.h ../../include/sys/resource.h \
-  ../../include/linux/minix_fs.h ../../include/asm/system.h 
-minix_op.o : minix_op.c ../../include/linux/fs.h ../../include/sys/types.h \
-  ../../include/linux/minix_fs.h 
-namei.o : namei.c ../../include/linux/sched.h ../../include/linux/head.h \
-  ../../include/linux/fs.h ../../include/sys/types.h ../../include/linux/mm.h \
-  ../../include/linux/kernel.h ../../include/signal.h \
-  ../../include/sys/param.h ../../include/sys/time.h ../../include/time.h \
-  ../../include/sys/resource.h ../../include/linux/minix_fs.h \
-  ../../include/asm/segment.h ../../include/string.h ../../include/fcntl.h \
-  ../../include/errno.h ../../include/const.h ../../include/sys/stat.h 
-truncate.o : truncate.c ../../include/linux/sched.h \
-  ../../include/linux/head.h ../../include/linux/fs.h \
-  ../../include/sys/types.h ../../include/linux/mm.h \
-  ../../include/linux/kernel.h ../../include/signal.h \
-  ../../include/sys/param.h ../../include/sys/time.h ../../include/time.h \
-  ../../include/sys/resource.h ../../include/linux/minix_fs.h \
-  ../../include/linux/tty.h ../../include/termios.h ../../include/errno.h \
-  ../../include/fcntl.h ../../include/sys/stat.h 
+bitmap.o : bitmap.c /usr/src/linux/include/linux/string.h /usr/src/linux/include/sys/types.h \
+  /usr/src/linux/include/stddef.h /usr/src/linux/include/linux/sched.h /usr/src/linux/include/linux/head.h \
+  /usr/src/linux/include/linux/fs.h /usr/src/linux/include/sys/dirent.h /usr/src/linux/include/limits.h \
+  /usr/src/linux/include/sys/vfs.h /usr/src/linux/include/linux/mm.h /usr/src/linux/include/linux/kernel.h \
+  /usr/src/linux/include/signal.h /usr/src/linux/include/sys/param.h /usr/src/linux/include/sys/time.h \
+  /usr/src/linux/include/time.h /usr/src/linux/include/sys/resource.h /usr/src/linux/include/linux/minix_fs.h 
+blkdev.o : blkdev.c /usr/src/linux/include/errno.h /usr/src/linux/include/linux/sched.h \
+  /usr/src/linux/include/linux/head.h /usr/src/linux/include/linux/fs.h /usr/src/linux/include/sys/types.h \
+  /usr/src/linux/include/stddef.h /usr/src/linux/include/sys/dirent.h /usr/src/linux/include/limits.h \
+  /usr/src/linux/include/sys/vfs.h /usr/src/linux/include/linux/mm.h /usr/src/linux/include/linux/kernel.h \
+  /usr/src/linux/include/signal.h /usr/src/linux/include/sys/param.h /usr/src/linux/include/sys/time.h \
+  /usr/src/linux/include/time.h /usr/src/linux/include/sys/resource.h /usr/src/linux/include/linux/minix_fs.h \
+  /usr/src/linux/include/linux/tty.h /usr/src/linux/include/asm/system.h /usr/src/linux/include/termios.h \
+  /usr/src/linux/include/linux/stat.h /usr/src/linux/include/linux/fcntl.h 
+chrdev.o : chrdev.c /usr/src/linux/include/errno.h /usr/src/linux/include/linux/sched.h \
+  /usr/src/linux/include/linux/head.h /usr/src/linux/include/linux/fs.h /usr/src/linux/include/sys/types.h \
+  /usr/src/linux/include/stddef.h /usr/src/linux/include/sys/dirent.h /usr/src/linux/include/limits.h \
+  /usr/src/linux/include/sys/vfs.h /usr/src/linux/include/linux/mm.h /usr/src/linux/include/linux/kernel.h \
+  /usr/src/linux/include/signal.h /usr/src/linux/include/sys/param.h /usr/src/linux/include/sys/time.h \
+  /usr/src/linux/include/time.h /usr/src/linux/include/sys/resource.h /usr/src/linux/include/linux/minix_fs.h \
+  /usr/src/linux/include/linux/tty.h /usr/src/linux/include/asm/system.h /usr/src/linux/include/termios.h \
+  /usr/src/linux/include/linux/stat.h /usr/src/linux/include/linux/fcntl.h 
+dir.o : dir.c /usr/src/linux/include/errno.h /usr/src/linux/include/asm/segment.h \
+  /usr/src/linux/include/linux/fs.h /usr/src/linux/include/sys/types.h /usr/src/linux/include/stddef.h \
+  /usr/src/linux/include/sys/dirent.h /usr/src/linux/include/limits.h /usr/src/linux/include/sys/vfs.h \
+  /usr/src/linux/include/linux/minix_fs.h /usr/src/linux/include/linux/stat.h 
+fifo.o : fifo.c /usr/src/linux/include/linux/sched.h /usr/src/linux/include/linux/head.h \
+  /usr/src/linux/include/linux/fs.h /usr/src/linux/include/sys/types.h /usr/src/linux/include/stddef.h \
+  /usr/src/linux/include/sys/dirent.h /usr/src/linux/include/limits.h /usr/src/linux/include/sys/vfs.h \
+  /usr/src/linux/include/linux/mm.h /usr/src/linux/include/linux/kernel.h /usr/src/linux/include/signal.h \
+  /usr/src/linux/include/sys/param.h /usr/src/linux/include/sys/time.h /usr/src/linux/include/time.h \
+  /usr/src/linux/include/sys/resource.h /usr/src/linux/include/linux/minix_fs.h 
+file.o : file.c /usr/src/linux/include/errno.h /usr/src/linux/include/sys/dirent.h \
+  /usr/src/linux/include/limits.h /usr/src/linux/include/sys/types.h /usr/src/linux/include/stddef.h \
+  /usr/src/linux/include/asm/segment.h /usr/src/linux/include/asm/system.h /usr/src/linux/include/linux/fcntl.h \
+  /usr/src/linux/include/linux/sched.h /usr/src/linux/include/linux/head.h /usr/src/linux/include/linux/fs.h \
+  /usr/src/linux/include/sys/vfs.h /usr/src/linux/include/linux/mm.h /usr/src/linux/include/linux/kernel.h \
+  /usr/src/linux/include/signal.h /usr/src/linux/include/sys/param.h /usr/src/linux/include/sys/time.h \
+  /usr/src/linux/include/time.h /usr/src/linux/include/sys/resource.h /usr/src/linux/include/linux/minix_fs.h \
+  /usr/src/linux/include/linux/stat.h 
+inode.o : inode.c /usr/src/linux/include/linux/string.h /usr/src/linux/include/sys/types.h \
+  /usr/src/linux/include/stddef.h /usr/src/linux/include/linux/stat.h /usr/src/linux/include/linux/sched.h \
+  /usr/src/linux/include/linux/head.h /usr/src/linux/include/linux/fs.h /usr/src/linux/include/sys/dirent.h \
+  /usr/src/linux/include/limits.h /usr/src/linux/include/sys/vfs.h /usr/src/linux/include/linux/mm.h \
+  /usr/src/linux/include/linux/kernel.h /usr/src/linux/include/signal.h /usr/src/linux/include/sys/param.h \
+  /usr/src/linux/include/sys/time.h /usr/src/linux/include/time.h /usr/src/linux/include/sys/resource.h \
+  /usr/src/linux/include/linux/minix_fs.h /usr/src/linux/include/asm/system.h \
+  /usr/src/linux/include/asm/segment.h 
+namei.o : namei.c /usr/src/linux/include/linux/sched.h /usr/src/linux/include/linux/head.h \
+  /usr/src/linux/include/linux/fs.h /usr/src/linux/include/sys/types.h /usr/src/linux/include/stddef.h \
+  /usr/src/linux/include/sys/dirent.h /usr/src/linux/include/limits.h /usr/src/linux/include/sys/vfs.h \
+  /usr/src/linux/include/linux/mm.h /usr/src/linux/include/linux/kernel.h /usr/src/linux/include/signal.h \
+  /usr/src/linux/include/sys/param.h /usr/src/linux/include/sys/time.h /usr/src/linux/include/time.h \
+  /usr/src/linux/include/sys/resource.h /usr/src/linux/include/linux/minix_fs.h \
+  /usr/src/linux/include/linux/string.h /usr/src/linux/include/linux/stat.h /usr/src/linux/include/linux/fcntl.h \
+  /usr/src/linux/include/asm/segment.h /usr/src/linux/include/errno.h /usr/src/linux/include/const.h 
+symlink.o : symlink.c /usr/src/linux/include/errno.h /usr/src/linux/include/asm/segment.h \
+  /usr/src/linux/include/linux/sched.h /usr/src/linux/include/linux/head.h /usr/src/linux/include/linux/fs.h \
+  /usr/src/linux/include/sys/types.h /usr/src/linux/include/stddef.h /usr/src/linux/include/sys/dirent.h \
+  /usr/src/linux/include/limits.h /usr/src/linux/include/sys/vfs.h /usr/src/linux/include/linux/mm.h \
+  /usr/src/linux/include/linux/kernel.h /usr/src/linux/include/signal.h /usr/src/linux/include/sys/param.h \
+  /usr/src/linux/include/sys/time.h /usr/src/linux/include/time.h /usr/src/linux/include/sys/resource.h \
+  /usr/src/linux/include/linux/minix_fs.h /usr/src/linux/include/linux/stat.h 
+truncate.o : truncate.c /usr/src/linux/include/errno.h /usr/src/linux/include/linux/sched.h \
+  /usr/src/linux/include/linux/head.h /usr/src/linux/include/linux/fs.h /usr/src/linux/include/sys/types.h \
+  /usr/src/linux/include/stddef.h /usr/src/linux/include/sys/dirent.h /usr/src/linux/include/limits.h \
+  /usr/src/linux/include/sys/vfs.h /usr/src/linux/include/linux/mm.h /usr/src/linux/include/linux/kernel.h \
+  /usr/src/linux/include/signal.h /usr/src/linux/include/sys/param.h /usr/src/linux/include/sys/time.h \
+  /usr/src/linux/include/time.h /usr/src/linux/include/sys/resource.h /usr/src/linux/include/linux/minix_fs.h \
+  /usr/src/linux/include/linux/tty.h /usr/src/linux/include/asm/system.h /usr/src/linux/include/termios.h \
+  /usr/src/linux/include/linux/stat.h /usr/src/linux/include/linux/fcntl.h 

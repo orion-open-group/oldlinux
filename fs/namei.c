@@ -8,16 +8,16 @@
  * Some corrections by tytso.
  */
 
-#include <linux/sched.h>
-#include <linux/minix_fs.h>
-#include <linux/kernel.h>
-#include <asm/segment.h>
-
-#include <string.h>
-#include <fcntl.h>
 #include <errno.h>
 #include <const.h>
-#include <sys/stat.h>
+
+#include <asm/segment.h>
+
+#include <linux/sched.h>
+#include <linux/kernel.h>
+#include <linux/string.h>
+#include <linux/fcntl.h>
+#include <linux/stat.h>
 
 struct inode * _namei(const char * filename, struct inode * base,
 	int follow_links);
@@ -168,10 +168,6 @@ struct inode * _namei(const char * pathname, struct inode * base,
 		inode = follow_link(base,inode);
 	else
 		iput(base);
-	if (inode) {
-		inode->i_atime=CURRENT_TIME;
-		inode->i_dirt=1;
-	}
 	return inode;
 }
 
@@ -206,7 +202,7 @@ int open_namei(const char * pathname, int flag, int mode,
 
 	if ((flag & O_TRUNC) && !(flag & O_ACCMODE))
 		flag |= O_WRONLY;
-	mode &= 0777 & ~current->umask;
+	mode &= 07777 & ~current->umask;
 	mode |= I_REGULAR;
 	if (!(dir = dir_namei(pathname,&namelen,&basename,NULL)))
 		return -ENOENT;
@@ -249,19 +245,20 @@ int open_namei(const char * pathname, int flag, int mode,
 	}
 	inode->i_atime = CURRENT_TIME;
 	if (flag & O_TRUNC)
-		minix_truncate(inode);
+		if (inode->i_op && inode->i_op->truncate) {
+			inode->i_size = 0;
+			inode->i_op->truncate(inode);
+		}
 	*res_inode = inode;
 	return 0;
 }
 
-int sys_mknod(const char * filename, int mode, int dev)
+int do_mknod(const char * filename, int mode, int dev)
 {
 	const char * basename;
 	int namelen;
 	struct inode * dir;
 	
-	if (!suser())
-		return -EPERM;
 	if (!(dir = dir_namei(filename,&namelen,&basename, NULL)))
 		return -ENOENT;
 	if (!namelen) {
@@ -270,13 +267,20 @@ int sys_mknod(const char * filename, int mode, int dev)
 	}
 	if (!permission(dir,MAY_WRITE)) {
 		iput(dir);
-		return -EPERM;
+		return -EACCES;
 	}
 	if (!dir->i_op || !dir->i_op->mknod) {
 		iput(dir);
 		return -EPERM;
 	}
 	return dir->i_op->mknod(dir,basename,namelen,mode,dev);
+}
+
+int sys_mknod(const char * filename, int mode, int dev)
+{
+	if (S_ISFIFO(mode) || suser())
+		return do_mknod(filename,mode,dev);
+	return -EPERM;
 }
 
 int sys_mkdir(const char * pathname, int mode)
@@ -293,7 +297,7 @@ int sys_mkdir(const char * pathname, int mode)
 	}
 	if (!permission(dir,MAY_WRITE)) {
 		iput(dir);
-		return -EPERM;
+		return -EACCES;
 	}
 	if (!dir->i_op || !dir->i_op->mkdir) {
 		iput(dir);
@@ -316,7 +320,7 @@ int sys_rmdir(const char * name)
 	}
 	if (!permission(dir,MAY_WRITE)) {
 		iput(dir);
-		return -EPERM;
+		return -EACCES;
 	}
 	if (!dir->i_op || !dir->i_op->rmdir) {
 		iput(dir);
@@ -335,11 +339,11 @@ int sys_unlink(const char * name)
 		return -ENOENT;
 	if (!namelen) {
 		iput(dir);
-		return -ENOENT;
+		return -EPERM;
 	}
 	if (!permission(dir,MAY_WRITE)) {
 		iput(dir);
-		return -EPERM;
+		return -EACCES;
 	}
 	if (!dir->i_op || !dir->i_op->unlink) {
 		iput(dir);
@@ -356,14 +360,14 @@ int sys_symlink(const char * oldname, const char * newname)
 
 	dir = dir_namei(newname,&namelen,&basename, NULL);
 	if (!dir)
-		return -EACCES;
+		return -ENOENT;
 	if (!namelen) {
 		iput(dir);
-		return -EPERM;
+		return -ENOENT;
 	}
 	if (!permission(dir,MAY_WRITE)) {
 		iput(dir);
-		return -EPERM;
+		return -EACCES;
 	}
 	if (!dir->i_op || !dir->i_op->symlink) {
 		iput(dir);
