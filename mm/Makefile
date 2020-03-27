@@ -1,30 +1,37 @@
-#
-# Makefile for the linux memory manager.
-#
-# Note! Dependencies are done automagically by 'make dep', which also
-# removes any old dependencies. DON'T put your own dependencies here
-# unless it's something special (ie not a .c file).
-#
-# Note 2! The CFLAGS definition is now in the main makefile...
+CC	=gcc
+CFLAGS	=-O -Wall -fstrength-reduce -fcombine-regs -fomit-frame-pointer \
+	-finline-functions -nostdinc -I../include
+AS	=gas
+AR	=gar
+LD	=gld
+CPP	=gcc -E -nostdinc -I../include
 
 .c.o:
-	$(CC) $(CFLAGS) -c $<
+	$(CC) $(CFLAGS) \
+	-c -o $*.o $<
 .s.o:
 	$(AS) -o $*.o $<
 .c.s:
-	$(CC) $(CFLAGS) -S $<
+	$(CC) $(CFLAGS) \
+	-S -o $*.s $<
 
-OBJS	= memory.o swap.o mmap.o kmalloc.o vmalloc.o
+OBJS	= memory.o page.o
+
+all: mm.o
 
 mm.o: $(OBJS)
 	$(LD) -r -o mm.o $(OBJS)
 
-dep:
-	$(CPP) -M *.c > .depend
+clean:
+	rm -f core *.o *.a tmp_make
+	for i in *.c;do rm -f `basename $$i .c`.s;done
 
-#
-# include a dependency file if one exists
-#
-ifeq (.depend,$(wildcard .depend))
-include .depend
-endif
+dep:
+	sed '/\#\#\# Dependencies/q' < Makefile > tmp_make
+	(for i in *.c;do $(CPP) -M $$i;done) >> tmp_make
+	cp tmp_make Makefile
+
+### Dependencies:
+memory.o : memory.c ../include/signal.h ../include/sys/types.h \
+  ../include/asm/system.h ../include/linux/sched.h ../include/linux/head.h \
+  ../include/linux/fs.h ../include/linux/mm.h ../include/linux/kernel.h 

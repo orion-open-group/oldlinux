@@ -1,78 +1,27 @@
-#ifndef _LINUX_KERNEL_H
-#define _LINUX_KERNEL_H
+/*
+* 'kernel.h'定义了一些常用函数的原型等。
+*/
+// 验证给定地址开始的内存块是否超限。若超限则追加内存。( kernel/fork.c, 24 )。
+void verify_area (void *addr, int count);
+// 显示内核出错信息，然后进入死循环。( kernel/panic.c, 16 )。
+void panic (const char *str);
+// 标准打印（显示）函数。( init/main.c, 151)。
+int printf (const char *fmt, ...);
+// 内核专用的打印信息函数，功能与printf()相同。( kernel/printk.c, 21 )。
+int printk (const char *fmt, ...);
+// 往tty 上写指定长度的字符串。( kernel/chr_drv/tty_io.c, 290 )。
+int tty_write (unsigned ch, char *buf, int count);
+// 通用内核内存分配函数。( lib/malloc.c, 117)。
+void *malloc (unsigned int size);
+// 释放指定对象占用的内存。( lib/malloc.c, 182)。
+void free_s (void *obj, int size);
+
+#define free(x) free_s((x), 0)
 
 /*
- * 'kernel.h' contains some often-used function prototypes etc
- */
-
-#ifdef __KERNEL__
-
-#include <linux/linkage.h>
-
-#define INT_MAX		((int)(~0U>>1))
-#define UINT_MAX	(~0U)
-#define LONG_MAX	((long)(~0UL>>1))
-#define ULONG_MAX	(~0UL)
-
-#define	KERN_EMERG	"<0>"	/* system is unusable			*/
-#define	KERN_ALERT	"<1>"	/* action must be taken immediately	*/
-#define	KERN_CRIT	"<2>"	/* critical conditions			*/
-#define	KERN_ERR	"<3>"	/* error conditions			*/
-#define	KERN_WARNING	"<4>"	/* warning conditions			*/
-#define	KERN_NOTICE	"<5>"	/* normal but significant condition	*/
-#define	KERN_INFO	"<6>"	/* informational			*/
-#define	KERN_DEBUG	"<7>"	/* debug-level messages			*/
-
-#if __GNUC__ < 2 || (__GNUC__ == 2 && __GNUC_MINOR__ < 5)
-# define NORET_TYPE    __volatile__
-# define ATTRIB_NORET  /**/
-# define NORET_AND     /**/
-#else
-# define NORET_TYPE    /**/
-# define ATTRIB_NORET  __attribute__((noreturn))
-# define NORET_AND     noreturn,
-#endif
-
-extern void math_error(void);
-NORET_TYPE void panic(const char * fmt, ...)
-	__attribute__ ((NORET_AND format (printf, 1, 2)));
-NORET_TYPE void do_exit(long error_code)
-	ATTRIB_NORET;
-unsigned long simple_strtoul(const char *,char **,unsigned int);
-int sprintf(char * buf, const char * fmt, ...);
-
-int session_of_pgrp(int pgrp);
-
-int kill_proc(int pid, int sig, int priv);
-int kill_pg(int pgrp, int sig, int priv);
-int kill_sl(int sess, int sig, int priv);
-
-asmlinkage int printk(const char * fmt, ...)
-	__attribute__ ((format (printf, 1, 2)));
-
-/*
- * This is defined as a macro, but at some point this might become a
- * real subroutine that sets a flag if it returns true (to do
- * BSD-style accounting where the process is flagged if it uses root
- * privs).  The implication of this is that you should do normal
- * permissions checks first, and check suser() last.
- */
-#define suser() (current->euid == 0)
-
-#endif /* __KERNEL__ */
-
-#define SI_LOAD_SHIFT	16
-struct sysinfo {
-	long uptime;			/* Seconds since boot */
-	unsigned long loads[3];		/* 1, 5, and 15 minute load averages */
-	unsigned long totalram;		/* Total usable main memory size */
-	unsigned long freeram;		/* Available memory size */
-	unsigned long sharedram;	/* Amount of shared memory */
-	unsigned long bufferram;	/* Memory used by buffers */
-	unsigned long totalswap;	/* Total swap space size */
-	unsigned long freeswap;		/* swap space still available */
-	unsigned short procs;		/* Number of current processes */
-	char _f[22];			/* Pads structure to 64 bytes */
-};
-
-#endif
+* 下面函数是以宏的形式定义的，但是在某方面来看它可以成为一个真正的子程序，
+* 如果返回是true 时它将设置标志（如果使用root 用户权限的进程设置了标志，则用
+* 于执行BSD 方式的计帐处理）。这意味着你应该首先执行常规权限检查，最后再
+* 检测suser()。
+*/
+#define suser() (current->euid == 0)	// 检测是否是超级用户。

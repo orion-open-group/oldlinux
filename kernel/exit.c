@@ -1,578 +1,254 @@
-/*
- *  linux/kernel/exit.c
- *
- *  Copyright (C) 1991, 1992  Linus Torvalds
- */
+/* passed
+* linux/kernel/exit.c
+*
+* (C) 1991 Linus Torvalds
+*/
+#include <set_seg.h>
 
-#define DEBUG_PROC_TREE
+#include <errno.h>		// 错误号头文件。包含系统中各种出错号。(Linus 从minix 中引进的)
+#include <signal.h>		// 信号头文件。定义信号符号常量，信号结构以及信号操作函数原型。
+#include <sys/wait.h>		// 等待调用头文件。定义系统调用wait()和waitpid()及相关常数符号。
 
-#include <linux/wait.h>
-#include <linux/errno.h>
-#include <linux/signal.h>
-#include <linux/sched.h>
-#include <linux/kernel.h>
-#include <linux/resource.h>
-#include <linux/mm.h>
-#include <linux/tty.h>
-#include <linux/malloc.h>
+#include <linux/sched.h>	// 调度程序头文件，定义了任务结构task_struct、初始任务0 的数据，
+// 还有一些有关描述符参数设置和获取的嵌入式汇编函数宏语句。
+#include <linux/kernel.h>	// 内核头文件。含有一些内核常用函数的原形定义。
+#include <linux/tty.h>		// tty 头文件，定义了有关tty_io，串行通信方面的参数、常数。
+#include <asm/segment.h>	// 段操作头文件。定义了有关段寄存器操作的嵌入式汇编函数。
 
-#include <asm/segment.h>
-extern void shm_exit (void);
-extern void sem_exit (void);
+int sys_pause (void);
+int sys_close (int fd);
 
-int getrusage(struct task_struct *, int, struct rusage *);
-
-static int generate(unsigned long sig, struct task_struct * p)
+//// 释放指定进程(任务)。
+void release (struct task_struct *p)
 {
-	unsigned long mask = 1 << (sig-1);
-	struct sigaction * sa = sig + p->sigaction - 1;
+  int i;
 
-	/* always generate signals for traced processes ??? */
-	if (p->flags & PF_PTRACED) {
-		p->signal |= mask;
-		return 1;
-	}
-	/* don't bother with ignored signals (but SIGCHLD is special) */
-	if (sa->sa_handler == SIG_IGN && sig != SIGCHLD)
-		return 0;
-	/* some signals are ignored by default.. (but SIGCONT already did its deed) */
-	if ((sa->sa_handler == SIG_DFL) &&
-	    (sig == SIGCONT || sig == SIGCHLD || sig == SIGWINCH))
-		return 0;
-	p->signal |= mask;
-	return 1;
-}
-
-int send_sig(unsigned long sig,struct task_struct * p,int priv)
-{
-	if (!p || sig > 32)
-		return -EINVAL;
-	if (!priv && ((sig != SIGCONT) || (current->session != p->session)) &&
-	    (current->euid != p->euid) && (current->uid != p->uid) && !suser())
-		return -EPERM;
-	if (!sig)
-		return 0;
-	if ((sig == SIGKILL) || (sig == SIGCONT)) {
-		if (p->state == TASK_STOPPED)
-			p->state = TASK_RUNNING;
-		p->exit_code = 0;
-		p->signal &= ~( (1<<(SIGSTOP-1)) | (1<<(SIGTSTP-1)) |
-				(1<<(SIGTTIN-1)) | (1<<(SIGTTOU-1)) );
-	}
-	/* Depends on order SIGSTOP, SIGTSTP, SIGTTIN, SIGTTOU */
-	if ((sig >= SIGSTOP) && (sig <= SIGTTOU)) 
-		p->signal &= ~(1<<(SIGCONT-1));
-	/* Actually generate the signal */
-	generate(sig,p);
-	return 0;
-}
-
-void notify_parent(struct task_struct * tsk)
-{
-	if (tsk->p_pptr == task[1])
-		tsk->exit_signal = SIGCHLD;
-	send_sig(tsk->exit_signal, tsk->p_pptr, 1);
-	wake_up_interruptible(&tsk->p_pptr->wait_chldexit);
-}
-
-void release(struct task_struct * p)
-{
-	int i;
-
-	if (!p)
-		return;
-	if (p == current) {
-		printk("task releasing itself\n");
-		return;
-	}
-	for (i=1 ; i<NR_TASKS ; i++)
-		if (task[i] == p) {
-			task[i] = NULL;
-			REMOVE_LINKS(p);
-			free_page(p->kernel_stack_page);
-			free_page((long) p);
-			return;
-		}
-	panic("trying to release non-existent task");
-}
-
-#ifdef DEBUG_PROC_TREE
-/*
- * Check to see if a task_struct pointer is present in the task[] array
- * Return 0 if found, and 1 if not found.
- */
-int bad_task_ptr(struct task_struct *p)
-{
-	int 	i;
-
-	if (!p)
-		return 0;
-	for (i=0 ; i<NR_TASKS ; i++)
-		if (task[i] == p)
-			return 0;
-	return 1;
-}
-	
-/*
- * This routine scans the pid tree and make sure the rep invarient still
- * holds.  Used for debugging only, since it's very slow....
- *
- * It looks a lot scarier than it really is.... we're doing nothing more
- * than verifying the doubly-linked list found in p_ysptr and p_osptr, 
- * and checking it corresponds with the process tree defined by p_cptr and 
- * p_pptr;
- */
-void audit_ptree(void)
-{
-	int	i;
-
-	for (i=1 ; i<NR_TASKS ; i++) {
-		if (!task[i])
-			continue;
-		if (bad_task_ptr(task[i]->p_pptr))
-			printk("Warning, pid %d's parent link is bad\n",
-				task[i]->pid);
-		if (bad_task_ptr(task[i]->p_cptr))
-			printk("Warning, pid %d's child link is bad\n",
-				task[i]->pid);
-		if (bad_task_ptr(task[i]->p_ysptr))
-			printk("Warning, pid %d's ys link is bad\n",
-				task[i]->pid);
-		if (bad_task_ptr(task[i]->p_osptr))
-			printk("Warning, pid %d's os link is bad\n",
-				task[i]->pid);
-		if (task[i]->p_pptr == task[i])
-			printk("Warning, pid %d parent link points to self\n",
-				task[i]->pid);
-		if (task[i]->p_cptr == task[i])
-			printk("Warning, pid %d child link points to self\n",
-				task[i]->pid);
-		if (task[i]->p_ysptr == task[i])
-			printk("Warning, pid %d ys link points to self\n",
-				task[i]->pid);
-		if (task[i]->p_osptr == task[i])
-			printk("Warning, pid %d os link points to self\n",
-				task[i]->pid);
-		if (task[i]->p_osptr) {
-			if (task[i]->p_pptr != task[i]->p_osptr->p_pptr)
-				printk(
-			"Warning, pid %d older sibling %d parent is %d\n",
-				task[i]->pid, task[i]->p_osptr->pid,
-				task[i]->p_osptr->p_pptr->pid);
-			if (task[i]->p_osptr->p_ysptr != task[i])
-				printk(
-		"Warning, pid %d older sibling %d has mismatched ys link\n",
-				task[i]->pid, task[i]->p_osptr->pid);
-		}
-		if (task[i]->p_ysptr) {
-			if (task[i]->p_pptr != task[i]->p_ysptr->p_pptr)
-				printk(
-			"Warning, pid %d younger sibling %d parent is %d\n",
-				task[i]->pid, task[i]->p_osptr->pid,
-				task[i]->p_osptr->p_pptr->pid);
-			if (task[i]->p_ysptr->p_osptr != task[i])
-				printk(
-		"Warning, pid %d younger sibling %d has mismatched os link\n",
-				task[i]->pid, task[i]->p_ysptr->pid);
-		}
-		if (task[i]->p_cptr) {
-			if (task[i]->p_cptr->p_pptr != task[i])
-				printk(
-			"Warning, pid %d youngest child %d has mismatched parent link\n",
-				task[i]->pid, task[i]->p_cptr->pid);
-			if (task[i]->p_cptr->p_ysptr)
-				printk(
-			"Warning, pid %d youngest child %d has non-NULL ys link\n",
-				task[i]->pid, task[i]->p_cptr->pid);
-		}
-	}
-}
-#endif /* DEBUG_PROC_TREE */
-
-/*
- * This checks not only the pgrp, but falls back on the pid if no
- * satisfactory prgp is found. I dunno - gdb doesn't work correctly
- * without this...
- */
-int session_of_pgrp(int pgrp)
-{
-	struct task_struct *p;
-	int fallback;
-
-	fallback = -1;
-	for_each_task(p) {
- 		if (p->session <= 0)
- 			continue;
-		if (p->pgrp == pgrp)
-			return p->session;
-		if (p->pid == pgrp)
-			fallback = p->session;
-	}
-	return fallback;
-}
-
-/*
- * kill_pg() sends a signal to a process group: this is what the tty
- * control characters do (^C, ^Z etc)
- */
-int kill_pg(int pgrp, int sig, int priv)
-{
-	struct task_struct *p;
-	int err,retval = -ESRCH;
-	int found = 0;
-
-	if (sig<0 || sig>32 || pgrp<=0)
-		return -EINVAL;
-	for_each_task(p) {
-		if (p->pgrp == pgrp) {
-			if ((err = send_sig(sig,p,priv)) != 0)
-				retval = err;
-			else
-				found++;
-		}
-	}
-	return(found ? 0 : retval);
-}
-
-/*
- * kill_sl() sends a signal to the session leader: this is used
- * to send SIGHUP to the controlling process of a terminal when
- * the connection is lost.
- */
-int kill_sl(int sess, int sig, int priv)
-{
-	struct task_struct *p;
-	int err,retval = -ESRCH;
-	int found = 0;
-
-	if (sig<0 || sig>32 || sess<=0)
-		return -EINVAL;
-	for_each_task(p) {
-		if (p->session == sess && p->leader) {
-			if ((err = send_sig(sig,p,priv)) != 0)
-				retval = err;
-			else
-				found++;
-		}
-	}
-	return(found ? 0 : retval);
-}
-
-int kill_proc(int pid, int sig, int priv)
-{
- 	struct task_struct *p;
-
-	if (sig<0 || sig>32)
-		return -EINVAL;
-	for_each_task(p) {
-		if (p && p->pid == pid)
-			return send_sig(sig,p,priv);
-	}
-	return(-ESRCH);
-}
-
-/*
- * POSIX specifies that kill(-1,sig) is unspecified, but what we have
- * is probably wrong.  Should make it like BSD or SYSV.
- */
-asmlinkage int sys_kill(int pid,int sig)
-{
-	int err, retval = 0, count = 0;
-
-	if (!pid)
-		return(kill_pg(current->pgrp,sig,0));
-	if (pid == -1) {
-		struct task_struct * p;
-		for_each_task(p) {
-			if (p->pid > 1 && p != current) {
-				++count;
-				if ((err = send_sig(sig,p,0)) != -EPERM)
-					retval = err;
-			}
-		}
-		return(count ? retval : -ESRCH);
-	}
-	if (pid < 0) 
-		return(kill_pg(-pid,sig,0));
-	/* Normal kill */
-	return(kill_proc(pid,sig,0));
-}
-
-/*
- * Determine if a process group is "orphaned", according to the POSIX
- * definition in 2.2.2.52.  Orphaned process groups are not to be affected
- * by terminal-generated stop signals.  Newly orphaned process groups are 
- * to receive a SIGHUP and a SIGCONT.
- * 
- * "I ask you, have you ever known what it is to be an orphan?"
- */
-int is_orphaned_pgrp(int pgrp)
-{
-	struct task_struct *p;
-
-	for_each_task(p) {
-		if ((p->pgrp != pgrp) || 
-		    (p->state == TASK_ZOMBIE) ||
-		    (p->p_pptr->pid == 1))
-			continue;
-		if ((p->p_pptr->pgrp != pgrp) &&
-		    (p->p_pptr->session == p->session))
-			return 0;
-	}
-	return(1);	/* (sighing) "Often!" */
-}
-
-static int has_stopped_jobs(int pgrp)
-{
-	struct task_struct * p;
-
-	for_each_task(p) {
-		if (p->pgrp != pgrp)
-			continue;
-		if (p->state == TASK_STOPPED)
-			return(1);
-	}
-	return(0);
-}
-
-static void forget_original_parent(struct task_struct * father)
-{
-	struct task_struct * p;
-
-	for_each_task(p) {
-		if (p->p_opptr == father)
-			if (task[1])
-				p->p_opptr = task[1];
-			else
-				p->p_opptr = task[0];
-	}
-}
-
-NORET_TYPE void do_exit(long code)
-{
-	struct task_struct *p;
-	int i;
-
-fake_volatile:
-	if (current->semun)
-		sem_exit();
-	if (current->shm)
-		shm_exit();
-	free_page_tables(current);
-	for (i=0 ; i<NR_OPEN ; i++)
-		if (current->filp[i])
-			sys_close(i);
-	forget_original_parent(current);
-	iput(current->pwd);
-	current->pwd = NULL;
-	iput(current->root);
-	current->root = NULL;
-	iput(current->executable);
-	current->executable = NULL;
-	/* Release all of the old mmap stuff. */
-	
+  if (!p)
+    return;
+  for (i = 1; i < NR_TASKS; i++)	// 扫描任务数组，寻找指定任务。
+    if (task[i] == p)
 	{
-		struct vm_area_struct * mpnt, *mpnt1;
-		mpnt = current->mmap;
-		current->mmap = NULL;
-		while (mpnt) {
-			mpnt1 = mpnt->vm_next;
-			if (mpnt->vm_ops && mpnt->vm_ops->close)
-				mpnt->vm_ops->close(mpnt);
-			kfree(mpnt);
-			mpnt = mpnt1;
-		}
+		task[i] = NULL;		// 置空该任务项并释放相关内存页。
+		free_page ((long) p);
+		schedule ();		// 重新调度。
+		return;
 	}
+  panic ("trying to release non-existent task");	// 指定任务若不存在则死机。
+}
 
-	if (current->ldt) {
-		vfree(current->ldt);
-		current->ldt = NULL;
-		for (i=1 ; i<NR_TASKS ; i++) {
-			if (task[i] == current) {
-				set_ldt_desc(gdt+(i<<1)+FIRST_LDT_ENTRY, &default_ldt, 1);
-				load_ldt(i);
-			}
-		}
-	}
+//// 向指定任务(*p)发送信号(sig)，权限为priv。
+static _inline int
+send_sig (long sig, struct task_struct *p, int priv)
+{
+// 若信号不正确或任务指针为空则出错退出。
+  if (!p || sig < 1 || sig > 32)
+    return -EINVAL;
+// 若有权或进程有效用户标识符(euid)就是指定进程的euid 或者是超级用户，则在进程位图中添加
+// 该信号，否则出错退出。其中suser()定义为(current->euid==0)，用于判断是否超级用户。
+  if (priv || (current->euid == p->euid) || suser ())
+    p->signal |= (1 << (sig - 1));
+  else
+    return -EPERM;
+  return 0;
+}
 
-	current->state = TASK_ZOMBIE;
-	current->exit_code = code;
-	current->rss = 0;
-	/* 
-	 * Check to see if any process groups have become orphaned
-	 * as a result of our exiting, and if they have any stopped
-	 * jobs, send them a SIGUP and then a SIGCONT.  (POSIX 3.2.2.2)
-	 *
-	 * Case i: Our father is in a different pgrp than we are
-	 * and we were the only connection outside, so our pgrp
-	 * is about to become orphaned.
- 	 */
-	if ((current->p_pptr->pgrp != current->pgrp) &&
-	    (current->p_pptr->session == current->session) &&
-	    is_orphaned_pgrp(current->pgrp) &&
-	    has_stopped_jobs(current->pgrp)) {
-		kill_pg(current->pgrp,SIGHUP,1);
-		kill_pg(current->pgrp,SIGCONT,1);
-	}
-	/* Let father know we died */
-	notify_parent(current);
-	
-	/*
-	 * This loop does two things:
-	 * 
-  	 * A.  Make init inherit all the child processes
-	 * B.  Check to see if any process groups have become orphaned
-	 *	as a result of our exiting, and if they have any stopped
-	 *	jobs, send them a SIGHUP and then a SIGCONT.  (POSIX 3.2.2.2)
-	 */
-	while ((p = current->p_cptr) != NULL) {
-		current->p_cptr = p->p_osptr;
-		p->p_ysptr = NULL;
-		p->flags &= ~(PF_PTRACED|PF_TRACESYS);
-		if (task[1] && task[1] != current)
-			p->p_pptr = task[1];
-		else
-			p->p_pptr = task[0];
-		p->p_osptr = p->p_pptr->p_cptr;
-		p->p_osptr->p_ysptr = p;
-		p->p_pptr->p_cptr = p;
-		if (p->state == TASK_ZOMBIE)
-			notify_parent(p);
-		/*
-		 * process group orphan check
-		 * Case ii: Our child is in a different pgrp 
-		 * than we are, and it was the only connection
-		 * outside, so the child pgrp is now orphaned.
-		 */
-		if ((p->pgrp != current->pgrp) &&
-		    (p->session == current->session) &&
-		    is_orphaned_pgrp(p->pgrp) &&
-		    has_stopped_jobs(p->pgrp)) {
-			kill_pg(p->pgrp,SIGHUP,1);
-			kill_pg(p->pgrp,SIGCONT,1);
-		}
-	}
-	if (current->leader)
-		disassociate_ctty(1);
-	if (last_task_used_math == current)
-		last_task_used_math = NULL;
-#ifdef DEBUG_PROC_TREE
-	audit_ptree();
-#endif
-	schedule();
+//// 终止会话(session)。
+static void kill_session (void)
+{
+  struct task_struct **p = NR_TASKS + task;	// 指针*p 首先指向任务数组最末端。
+
+// 对于所有的任务（除任务0 以外），如果其会话等于当前进程的会话就向它发送挂断进程信号。
+  while (--p > &FIRST_TASK)
+  {
+    if (*p && (*p)->session == current->session)
+	  (*p)->signal |= 1 << (SIGHUP - 1);	// 发送挂断进程信号。
+  }
+}
+
 /*
- * In order to get rid of the "volatile function does return" message
- * I did this little loop that confuses gcc to think do_exit really
- * is volatile. In fact it's schedule() that is volatile in some
- * circumstances: when current->state = ZOMBIE, schedule() never
- * returns.
- *
- * In fact the natural way to do all this is to have the label and the
- * goto right after each other, but I put the fake_volatile label at
- * the start of the function just in case something /really/ bad
- * happens, and the schedule returns. This way we can try again. I'm
- * not paranoid: it's just that everybody is out to get me.
- */
-	goto fake_volatile;
-}
-
-asmlinkage int sys_exit(int error_code)
+* 为了向进程组等发送信号，XXX 需要检查许可。kill()的许可机制非常巧妙!
+*/
+//// kill()系统调用可用于向任何进程或进程组发送任何信号。
+// 如果pid 值>0，则信号被发送给pid。
+// 如果pid=0，那么信号就会被发送给当前进程的进程组中的所有进程。
+// 如果pid=-1，则信号sig 就会发送给除第一个进程外的所有进程。
+// 如果pid < -1，则信号sig 将发送给进程组-pid 的所有进程。
+// 如果信号sig 为0，则不发送信号，但仍会进行错误检查。如果成功则返回0。
+int sys_kill (int pid, int sig)
 {
-	do_exit((error_code&0xff)<<8);
-}
+  struct task_struct **p = NR_TASKS + task;
+  int err, retval = 0;
 
-asmlinkage int sys_wait4(pid_t pid,unsigned long * stat_addr, int options, struct rusage * ru)
-{
-	int flag, retval;
-	struct wait_queue wait = { current, NULL };
-	struct task_struct *p;
-
-	if (stat_addr) {
-		flag = verify_area(VERIFY_WRITE, stat_addr, 4);
-		if (flag)
-			return flag;
+  if (!pid)
+    while (--p > &FIRST_TASK)
+	{
+		if (*p && (*p)->pgrp == current->pid)
+		  if (err = send_sig (sig, *p, 1))
+			retval = err;
 	}
-	add_wait_queue(&current->wait_chldexit,&wait);
+  else if (pid > 0)
+    while (--p > &FIRST_TASK)
+    {
+	if (*p && (*p)->pid == pid)
+	  if (err = send_sig (sig, *p, 0))
+	    retval = err;
+    }
+  else if (pid == -1)
+    while (--p > &FIRST_TASK)
+      if (err = send_sig (sig, *p, 0))
+		retval = err;
+      else
+		while (--p > &FIRST_TASK)
+		  if (*p && (*p)->pgrp == -pid)
+			if (err = send_sig (sig, *p, 0))
+			  retval = err;
+  return retval;
+}
+
+//// 通知父进程 -- 向进程pid 发送信号SIGCHLD：子进程将停止或终止。
+// 如果没有找到父进程，则自己释放。
+static void tell_father (int pid)
+{
+  int i;
+
+  if (pid)
+    for (i = 0; i < NR_TASKS; i++)
+    {
+		if (!task[i])
+		  continue;
+		if (task[i]->pid != pid)
+		  continue;
+		task[i]->signal |= (1 << (SIGCHLD - 1));
+		return;
+    }
+/* if we don't find any fathers, we just release ourselves */
+/* This is not really OK. Must change it to make father 1 */
+  printk ("BAD BAD - no father found\n\r");
+  release (current);		// 如果没有找到父进程，则自己释放。
+}
+
+//// 程序退出处理程序。在系统调用的中断处理程序中被调用。
+int do_exit (long code)		// code 是错误码。
+{
+  int i;
+
+// 释放当前进程代码段和数据段所占的内存页(free_page_tables()在mm/memory.c,105 行)。
+  free_page_tables (get_base (current->ldt[1]), get_limit (0x0f));
+  free_page_tables (get_base (current->ldt[2]), get_limit (0x17));
+// 如果当前进程有子进程，就将子进程的father 置为1(其父进程改为进程1)。如果该子进程已经
+// 处于僵死(ZOMBIE)状态，则向进程1 发送子进程终止信号SIGCHLD。
+  for (i = 0; i < NR_TASKS; i++)
+    if (task[i] && task[i]->father == current->pid)
+      {
+	task[i]->father = 1;
+	if (task[i]->state == TASK_ZOMBIE)
+/* assumption task[1] is always init */
+	  (void) send_sig (SIGCHLD, task[1], 1);
+      }
+// 关闭当前进程打开着的所有文件。
+  for (i = 0; i < NR_OPEN; i++)
+    if (current->filp[i])
+      sys_close (i);
+// 对当前进程工作目录pwd、根目录root 以及运行程序的i 节点进行同步操作，并分别置空。
+  iput (current->pwd);
+  current->pwd = NULL;
+  iput (current->root);
+  current->root = NULL;
+  iput (current->executable);
+  current->executable = NULL;
+// 如果当前进程是领头(leader)进程并且其有控制的终端，则释放该终端。
+  if (current->leader && current->tty >= 0)
+    tty_table[current->tty].pgrp = 0;
+// 如果当前进程上次使用过协处理器，则将last_task_used_math 置空。
+  if (last_task_used_math == current)
+    last_task_used_math = NULL;
+// 如果当前进程是leader 进程，则终止所有相关进程。
+  if (current->leader)
+    kill_session ();
+// 把当前进程置为僵死状态，并设置退出码。
+  current->state = TASK_ZOMBIE;
+  current->exit_code = code;
+// 通知父进程，也即向父进程发送信号SIGCHLD -- 子进程将停止或终止。
+  tell_father (current->father);
+  schedule ();			// 重新调度进程的运行。
+  return (-1);			/* just to suppress warnings */
+}
+
+//// 系统调用exit()。终止进程。
+int sys_exit (int error_code)
+{
+  return do_exit ((error_code & 0xff) << 8);
+}
+
+//// 系统调用waitpid()。挂起当前进程，直到pid 指定的子进程退出（终止）或者收到要求终止
+// 该进程的信号，或者是需要调用一个信号句柄（信号处理程序）。如果pid 所指的子进程早已
+// 退出（已成所谓的僵死进程），则本调用将立刻返回。子进程使用的所有资源将释放。
+// 如果pid > 0, 表示等待进程号等于pid 的子进程。
+// 如果pid = 0, 表示等待进程组号等于当前进程的任何子进程。
+// 如果pid < -1, 表示等待进程组号等于pid 绝对值的任何子进程。
+// [ 如果pid = -1, 表示等待任何子进程。]
+// 若options = WUNTRACED，表示如果子进程是停止的，也马上返回。
+// 若options = WNOHANG，表示如果没有子进程退出或终止就马上返回。
+// 如果stat_addr 不为空，则就将状态信息保存到那里。
+int sys_waitpid (pid_t pid, unsigned long *stat_addr, int options)
+{
+  int flag, code;
+  struct task_struct **p;
+
+  verify_area (stat_addr, 4);
 repeat:
-	flag=0;
- 	for (p = current->p_cptr ; p ; p = p->p_osptr) {
-		if (pid>0) {
-			if (p->pid != pid)
-				continue;
-		} else if (!pid) {
-			if (p->pgrp != current->pgrp)
-				continue;
-		} else if (pid != -1) {
-			if (p->pgrp != -pid)
-				continue;
-		}
-		/* wait for cloned processes iff the __WCLONE flag is set */
-		if ((p->exit_signal != SIGCHLD) ^ ((options & __WCLONE) != 0))
+  flag = 0;
+  for (p = &LAST_TASK; p > &FIRST_TASK; --p)
+  {				// 从任务数组末端开始扫描所有任务。
+      if (!*p || *p == current)	// 跳过空项和本进程项。
+		continue;
+      if ((*p)->father != current->pid)	// 如果不是当前进程的子进程则跳过。
+		continue;
+      if (pid > 0)
+		{			// 如果指定的pid>0，但扫描的进程pid
+		  if ((*p)->pid != pid)	// 与之不等，则跳过。
 			continue;
-		flag = 1;
-		switch (p->state) {
-			case TASK_STOPPED:
-				if (!p->exit_code)
-					continue;
-				if (!(options & WUNTRACED) && !(p->flags & PF_PTRACED))
-					continue;
-				if (stat_addr)
-					put_fs_long((p->exit_code << 8) | 0x7f,
-						stat_addr);
-				p->exit_code = 0;
-				if (ru != NULL)
-					getrusage(p, RUSAGE_BOTH, ru);
-				retval = p->pid;
-				goto end_wait4;
-			case TASK_ZOMBIE:
-				current->cutime += p->utime + p->cutime;
-				current->cstime += p->stime + p->cstime;
-				current->cmin_flt += p->min_flt + p->cmin_flt;
-				current->cmaj_flt += p->maj_flt + p->cmaj_flt;
-				if (ru != NULL)
-					getrusage(p, RUSAGE_BOTH, ru);
-				flag = p->pid;
-				if (stat_addr)
-					put_fs_long(p->exit_code, stat_addr);
-				if (p->p_opptr != p->p_pptr) {
-					REMOVE_LINKS(p);
-					p->p_pptr = p->p_opptr;
-					SET_LINKS(p);
-					notify_parent(p);
-				} else
-					release(p);
-#ifdef DEBUG_PROC_TREE
-				audit_ptree();
-#endif
-				retval = flag;
-				goto end_wait4;
-			default:
-				continue;
 		}
+      else if (!pid)
+		{			// 如果指定的pid=0，但扫描的进程组号
+		  if ((*p)->pgrp != current->pgrp)	// 与当前进程的组号不等，则跳过。
+			continue;
+		}
+      else if (pid != -1)
+		{			// 如果指定的pid<-1，但扫描的进程组号
+		  if ((*p)->pgrp != -pid)	// 与其绝对值不等，则跳过。
+			continue;
+		}
+    switch ((*p)->state)
+	{
+	case TASK_STOPPED:
+	  if (!(options & WUNTRACED))
+	    continue;
+	  put_fs_long (0x7f, stat_addr);	// 置状态信息为0x7f。
+	  return (*p)->pid;	// 退出，返回子进程的进程号。
+	case TASK_ZOMBIE:
+	  current->cutime += (*p)->utime;	// 更新当前进程的子进程用户
+	  current->cstime += (*p)->stime;	// 态和核心态运行时间。
+	  flag = (*p)->pid;
+	  code = (*p)->exit_code;	// 取子进程的退出码。
+	  release (*p);		// 释放该子进程。
+	  put_fs_long (code, stat_addr);	// 置状态信息为退出码值。
+	  return flag;		// 退出，返回子进程的pid.
+	default:
+	  flag = 1;		// 如果子进程不在停止或僵死状态，则flag=1。
+	  continue;
 	}
-	if (flag) {
-		retval = 0;
-		if (options & WNOHANG)
-			goto end_wait4;
-		current->state=TASK_INTERRUPTIBLE;
-		schedule();
-		current->signal &= ~(1<<(SIGCHLD-1));
-		retval = -ERESTARTSYS;
-		if (current->signal & ~current->blocked)
-			goto end_wait4;
-		goto repeat;
-	}
-	retval = -ECHILD;
-end_wait4:
-	remove_wait_queue(&current->wait_chldexit,&wait);
-	return retval;
-}
-
-/*
- * sys_waitpid() remains for compatibility. waitpid() should be
- * implemented by calling sys_wait4() from libc.a.
- */
-asmlinkage int sys_waitpid(pid_t pid,unsigned long * stat_addr, int options)
-{
-	return sys_wait4(pid, stat_addr, options, NULL);
+  }
+  if (flag)
+  {				// 如果子进程没有处于退出或僵死状态，
+	  if (options & WNOHANG)	// 并且options = WNOHANG，则立刻返回。
+		return 0;
+	  current->state = TASK_INTERRUPTIBLE;	// 置当前进程为可中断等待状态。
+	  schedule ();		// 重新调度。
+	  if (!(current->signal &= ~(1 << (SIGCHLD - 1))))	// 又开始执行本进程时，
+		goto repeat;		// 如果进程没有收到除SIGCHLD 的信号，则还是重复处理。
+	  else
+		return -EINTR;		// 退出，返回出错码。
+  }
+  return -ECHILD;
 }

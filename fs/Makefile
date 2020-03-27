@@ -1,84 +1,100 @@
-#
-# Makefile for the linux filesystem.
-#
-# Note! Dependencies are done automagically by 'make dep', which also
-# removes any old dependencies. DON'T put your own dependencies here
-# unless it's something special (ie not a .c file).
-#
-# Note 2! The CFLAGS definitions are now in the main makefile...
-
-SUBDIRS = minix ext ext2 msdos proc isofs nfs xiafs hpfs sysv
-
-ifdef CONFIG_MINIX_FS
-FS_SUBDIRS := $(FS_SUBDIRS) minix
-endif
-ifdef CONFIG_EXT_FS
-FS_SUBDIRS := $(FS_SUBDIRS) ext
-endif
-ifdef CONFIG_EXT2_FS
-FS_SUBDIRS := $(FS_SUBDIRS) ext2
-endif
-ifdef CONFIG_MSDOS_FS
-FS_SUBDIRS := $(FS_SUBDIRS) msdos
-endif
-ifdef CONFIG_PROC_FS
-FS_SUBDIRS := $(FS_SUBDIRS) proc
-endif
-ifdef CONFIG_ISO9660_FS
-FS_SUBDIRS := $(FS_SUBDIRS) isofs
-endif
-ifdef CONFIG_NFS_FS
-FS_SUBDIRS := $(FS_SUBDIRS) nfs
-endif
-ifdef CONFIG_XIA_FS
-FS_SUBDIRS := $(FS_SUBDIRS) xiafs
-endif
-ifdef CONFIG_SYSV_FS
-FS_SUBDIRS := $(FS_SUBDIRS) sysv
-endif
-ifdef CONFIG_HPFS_FS
-FS_SUBDIRS := $(FS_SUBDIRS) hpfs
-endif
-
-ifdef CONFIG_BINFMT_ELF
-BINFMTS := $(BINFMTS) binfmt_elf.o
-endif
-ifdef CONFIG_BINFMT_COFF
-BINFMTS := $(BINFMTS) binfmt_coff.o
-endif
+AR	=gar
+AS	=gas
+CC	=gcc
+LD	=gld
+CFLAGS	=-Wall -O -fstrength-reduce -fcombine-regs -fomit-frame-pointer \
+	-mstring-insns -nostdinc -I../include
+CPP	=gcc -E -nostdinc -I../include
 
 .c.s:
-	$(CC) $(CFLAGS) -S $<
+	$(CC) $(CFLAGS) \
+	-S -o $*.s $<
 .c.o:
-	$(CC) $(CFLAGS) -c $<
+	$(CC) $(CFLAGS) \
+	-c -o $*.o $<
 .s.o:
 	$(AS) -o $*.o $<
 
-OBJS=	open.o read_write.o inode.o devices.o file_table.o buffer.o super.o \
-	block_dev.o stat.o exec.o pipe.o namei.o fcntl.o ioctl.o \
-	select.o fifo.o locks.o filesystems.o $(BINFMTS)
-
-all: fs.o filesystems.a
+OBJS=	open.o read_write.o inode.o file_table.o buffer.o super.o \
+	block_dev.o char_dev.o file_dev.o stat.o exec.o pipe.o namei.o \
+	bitmap.o fcntl.o ioctl.o truncate.o
 
 fs.o: $(OBJS)
 	$(LD) -r -o fs.o $(OBJS)
 
-filesystems.a: dummy
-	rm -f filesystems.a
-	set -e; for i in $(FS_SUBDIRS); do \
-	  test ! -d $$i || \
-	    { $(MAKE) -C $$i; $(AR) rcs filesystems.a $$i/$$i.o; }; done
+clean:
+	rm -f core *.o *.a tmp_make
+	for i in *.c;do rm -f `basename $$i .c`.s;done
 
-depend dep:
-	$(CPP) -M *.c > .depend
-	set -e; for i in $(SUBDIRS); do \
-	  test ! -d $$i || $(MAKE) -C $$i dep; done
+dep:
+	sed '/\#\#\# Dependencies/q' < Makefile > tmp_make
+	(for i in *.c;do $(CPP) -M $$i;done) >> tmp_make
+	cp tmp_make Makefile
 
-dummy:
-
-#
-# include a dependency file if one exists
-#
-ifeq (.depend,$(wildcard .depend))
-include .depend
-endif
+### Dependencies:
+bitmap.o : bitmap.c ../include/string.h ../include/linux/sched.h \
+  ../include/linux/head.h ../include/linux/fs.h ../include/sys/types.h \
+  ../include/linux/mm.h ../include/signal.h ../include/linux/kernel.h 
+block_dev.o : block_dev.c ../include/errno.h ../include/linux/sched.h \
+  ../include/linux/head.h ../include/linux/fs.h ../include/sys/types.h \
+  ../include/linux/mm.h ../include/signal.h ../include/linux/kernel.h \
+  ../include/asm/segment.h ../include/asm/system.h 
+buffer.o : buffer.c ../include/stdarg.h ../include/linux/config.h \
+  ../include/linux/sched.h ../include/linux/head.h ../include/linux/fs.h \
+  ../include/sys/types.h ../include/linux/mm.h ../include/signal.h \
+  ../include/linux/kernel.h ../include/asm/system.h ../include/asm/io.h 
+char_dev.o : char_dev.c ../include/errno.h ../include/sys/types.h \
+  ../include/linux/sched.h ../include/linux/head.h ../include/linux/fs.h \
+  ../include/linux/mm.h ../include/signal.h ../include/linux/kernel.h \
+  ../include/asm/segment.h ../include/asm/io.h 
+exec.o : exec.c ../include/errno.h ../include/string.h \
+  ../include/sys/stat.h ../include/sys/types.h ../include/a.out.h \
+  ../include/linux/fs.h ../include/linux/sched.h ../include/linux/head.h \
+  ../include/linux/mm.h ../include/signal.h ../include/linux/kernel.h \
+  ../include/asm/segment.h 
+fcntl.o : fcntl.c ../include/string.h ../include/errno.h \
+  ../include/linux/sched.h ../include/linux/head.h ../include/linux/fs.h \
+  ../include/sys/types.h ../include/linux/mm.h ../include/signal.h \
+  ../include/linux/kernel.h ../include/asm/segment.h ../include/fcntl.h \
+  ../include/sys/stat.h 
+file_dev.o : file_dev.c ../include/errno.h ../include/fcntl.h \
+  ../include/sys/types.h ../include/linux/sched.h ../include/linux/head.h \
+  ../include/linux/fs.h ../include/linux/mm.h ../include/signal.h \
+  ../include/linux/kernel.h ../include/asm/segment.h 
+file_table.o : file_table.c ../include/linux/fs.h ../include/sys/types.h 
+inode.o : inode.c ../include/string.h ../include/sys/stat.h \
+  ../include/sys/types.h ../include/linux/sched.h ../include/linux/head.h \
+  ../include/linux/fs.h ../include/linux/mm.h ../include/signal.h \
+  ../include/linux/kernel.h ../include/asm/system.h 
+ioctl.o : ioctl.c ../include/string.h ../include/errno.h \
+  ../include/sys/stat.h ../include/sys/types.h ../include/linux/sched.h \
+  ../include/linux/head.h ../include/linux/fs.h ../include/linux/mm.h \
+  ../include/signal.h 
+namei.o : namei.c ../include/linux/sched.h ../include/linux/head.h \
+  ../include/linux/fs.h ../include/sys/types.h ../include/linux/mm.h \
+  ../include/signal.h ../include/linux/kernel.h ../include/asm/segment.h \
+  ../include/string.h ../include/fcntl.h ../include/errno.h \
+  ../include/const.h ../include/sys/stat.h 
+open.o : open.c ../include/string.h ../include/errno.h ../include/fcntl.h \
+  ../include/sys/types.h ../include/utime.h ../include/sys/stat.h \
+  ../include/linux/sched.h ../include/linux/head.h ../include/linux/fs.h \
+  ../include/linux/mm.h ../include/signal.h ../include/linux/tty.h \
+  ../include/termios.h ../include/linux/kernel.h ../include/asm/segment.h 
+pipe.o : pipe.c ../include/signal.h ../include/sys/types.h \
+  ../include/linux/sched.h ../include/linux/head.h ../include/linux/fs.h \
+  ../include/linux/mm.h ../include/asm/segment.h 
+read_write.o : read_write.c ../include/sys/stat.h ../include/sys/types.h \
+  ../include/errno.h ../include/linux/kernel.h ../include/linux/sched.h \
+  ../include/linux/head.h ../include/linux/fs.h ../include/linux/mm.h \
+  ../include/signal.h ../include/asm/segment.h 
+stat.o : stat.c ../include/errno.h ../include/sys/stat.h \
+  ../include/sys/types.h ../include/linux/fs.h ../include/linux/sched.h \
+  ../include/linux/head.h ../include/linux/mm.h ../include/signal.h \
+  ../include/linux/kernel.h ../include/asm/segment.h 
+super.o : super.c ../include/linux/config.h ../include/linux/sched.h \
+  ../include/linux/head.h ../include/linux/fs.h ../include/sys/types.h \
+  ../include/linux/mm.h ../include/signal.h ../include/linux/kernel.h \
+  ../include/asm/system.h ../include/errno.h ../include/sys/stat.h 
+truncate.o : truncate.c ../include/linux/sched.h ../include/linux/head.h \
+  ../include/linux/fs.h ../include/sys/types.h ../include/linux/mm.h \
+  ../include/signal.h ../include/sys/stat.h 

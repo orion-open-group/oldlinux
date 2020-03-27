@@ -1,494 +1,290 @@
-/*
+/* passed
  *  linux/fs/open.c
  *
- *  Copyright (C) 1991, 1992  Linus Torvalds
+ *  (C) 1991  Linus Torvalds
  */
+#include <set_seg.h>
 
-#include <linux/vfs.h>
-#include <linux/types.h>
-#include <linux/utime.h>
-#include <linux/errno.h>
-#include <linux/fcntl.h>
-#include <linux/stat.h>
-#include <linux/string.h>
-#include <linux/sched.h>
-#include <linux/kernel.h>
-#include <linux/signal.h>
-#include <linux/tty.h>
-#include <linux/time.h>
+#include <string.h>// 字符串头文件。主要定义了一些有关字符串操作的嵌入函数。
+#include <errno.h>// 错误号头文件。包含系统中各种出错号。(Linus 从minix 中引进的)。
+#include <fcntl.h>// 文件控制头文件。用于文件及其描述符的操作控制常数符号的定义。
+#include <sys/types.h>// 类型头文件。定义了基本的系统数据类型。
+#include <utime.h>// 用户时间头文件。定义了访问和修改时间结构以及utime()原型。
+#include <sys/stat.h>// 文件状态头文件。含有文件或文件系统状态结构stat{}和常量。
 
-#include <asm/segment.h>
+#include <linux/sched.h>// 调度程序头文件，定义了任务结构task_struct、初始任务0 的数据，
+						// 还有一些有关描述符参数设置和获取的嵌入式汇编函数宏语句。
+#include <linux/tty.h>// tty 头文件，定义了有关tty_io，串行通信方面的参数、常数。
+#include <linux/kernel.h>// 内核头文件。含有一些内核常用函数的原形定义。
+#include <asm/segment.h>// 段操作头文件。定义了有关段寄存器操作的嵌入式汇编函数。
 
-extern void fcntl_remove_locks(struct task_struct *, struct file *, unsigned int fd);
-
-asmlinkage int sys_ustat(int dev, struct ustat * ubuf)
+// 取文件系统信息系统调用函数。
+int sys_ustat(int dev, struct ustat * ubuf)
 {
 	return -ENOSYS;
 }
 
-asmlinkage int sys_statfs(const char * path, struct statfs * buf)
+//// 设置文件访问和修改时间。
+// 参数filename 是文件名，times 是访问和修改时间结构指针。
+// 如果times 指针不为NULL，则取utimbuf 结构中的时间信息来设置文件的访问和修改时间。如果
+// times 指针是NULL，则取系统当前时间来设置指定文件的访问和修改时间域。
+int sys_utime(char * filename, struct utimbuf * times)
 {
-	struct inode * inode;
-	int error;
-
-	error = verify_area(VERIFY_WRITE, buf, sizeof(struct statfs));
-	if (error)
-		return error;
-	error = namei(path,&inode);
-	if (error)
-		return error;
-	if (!inode->i_sb->s_op->statfs) {
-		iput(inode);
-		return -ENOSYS;
-	}
-	inode->i_sb->s_op->statfs(inode->i_sb, buf);
-	iput(inode);
-	return 0;
-}
-
-asmlinkage int sys_fstatfs(unsigned int fd, struct statfs * buf)
-{
-	struct inode * inode;
-	struct file * file;
-	int error;
-
-	error = verify_area(VERIFY_WRITE, buf, sizeof(struct statfs));
-	if (error)
-		return error;
-	if (fd >= NR_OPEN || !(file = current->filp[fd]))
-		return -EBADF;
-	if (!(inode = file->f_inode))
-		return -ENOENT;
-	if (!inode->i_sb->s_op->statfs)
-		return -ENOSYS;
-	inode->i_sb->s_op->statfs(inode->i_sb, buf);
-	return 0;
-}
-
-asmlinkage int sys_truncate(const char * path, unsigned int length)
-{
-	struct inode * inode;
-	int error;
-
-	error = namei(path,&inode);
-	if (error)
-		return error;
-	if (S_ISDIR(inode->i_mode) || !permission(inode,MAY_WRITE)) {
-		iput(inode);
-		return -EACCES;
-	}
-	if (IS_RDONLY(inode)) {
-		iput(inode);
-		return -EROFS;
-	}
-	inode->i_size = length;
-	if (inode->i_op && inode->i_op->truncate)
-		inode->i_op->truncate(inode);
-	inode->i_ctime = inode->i_mtime = CURRENT_TIME;
-	inode->i_dirt = 1;
-	error = notify_change(NOTIFY_SIZE, inode);
-	iput(inode);
-	return error;
-}
-
-asmlinkage int sys_ftruncate(unsigned int fd, unsigned int length)
-{
-	struct inode * inode;
-	struct file * file;
-
-	if (fd >= NR_OPEN || !(file = current->filp[fd]))
-		return -EBADF;
-	if (!(inode = file->f_inode))
-		return -ENOENT;
-	if (S_ISDIR(inode->i_mode) || !(file->f_mode & 2))
-		return -EACCES;
-	inode->i_size = length;
-	if (inode->i_op && inode->i_op->truncate)
-		inode->i_op->truncate(inode);
-	inode->i_ctime = inode->i_mtime = CURRENT_TIME;
-	inode->i_dirt = 1;
-	return notify_change(NOTIFY_SIZE, inode);
-}
-
-/* If times==NULL, set access and modification to current time,
- * must be owner or have write permission.
- * Else, update from *times, must be owner or super user.
- */
-asmlinkage int sys_utime(char * filename, struct utimbuf * times)
-{
-	struct inode * inode;
+	struct m_inode * inode;
 	long actime,modtime;
-	int error;
 
-	error = namei(filename,&inode);
-	if (error)
-		return error;
-	if (IS_RDONLY(inode)) {
-		iput(inode);
-		return -EROFS;
-	}
+// 根据文件名寻找对应的i 节点，如果没有找到，则返回出错码。
+	if (!(inode=namei(filename)))
+		return -ENOENT;
+// 如果访问和修改时间数据结构指针不为NULL，则从结构中读取用户设置的时间值。
 	if (times) {
-		if ((current->euid != inode->i_uid) && !suser()) {
-			iput(inode);
-			return -EPERM;
-		}
 		actime = get_fs_long((unsigned long *) &times->actime);
 		modtime = get_fs_long((unsigned long *) &times->modtime);
-		inode->i_ctime = CURRENT_TIME;
-	} else {
-		if ((current->euid != inode->i_uid) &&
-		    !permission(inode,MAY_WRITE)) {
-			iput(inode);
-			return -EACCES;
-		}
-		actime = modtime = inode->i_ctime = CURRENT_TIME;
-	}
+// 否则将访问和修改时间置为当前时间。
+	} else
+		actime = modtime = CURRENT_TIME;
+// 修改i 节点中的访问时间字段和修改时间字段。
 	inode->i_atime = actime;
 	inode->i_mtime = modtime;
+// 置i 节点已修改标志，释放该节点，并返回0。
 	inode->i_dirt = 1;
-	error = notify_change(NOTIFY_TIME, inode);
 	iput(inode);
-	return error;
+	return 0;
 }
 
 /*
- * XXX we should use the real ids for checking _all_ components of the
- * path.  Now we only use them for the final component of the path.
+ * 文件属性XXX，我们该用真实用户id 还是有效用户id？BSD 系统使用了真实用户id，
+ * 以使该调用可以供setuid 程序使用。（注：POSIX 标准建议使用真实用户ID）
  */
-asmlinkage int sys_access(const char * filename,int mode)
+//// 检查对文件的访问权限。
+// 参数filename 是文件名，mode 是屏蔽码，由R_OK(4)、W_OK(2)、X_OK(1)和F_OK(0)组成。
+// 如果请求访问允许的话，则返回0，否则返回出错码。
+int sys_access(const char * filename,int mode)
 {
-	struct inode * inode;
+	struct m_inode * inode;
 	int res, i_mode;
 
-	if (mode != (mode & S_IRWXO))	/* where's F_OK, X_OK, W_OK, R_OK? */
-		return -EINVAL;
-	res = namei(filename,&inode);
-	if (res)
-		return res;
-	i_mode = inode->i_mode;
-	res = i_mode & S_IRWXUGO;
-	if (current->uid == inode->i_uid)
-		res >>= 6;		/* needs cleaning? */
-	else if (in_group_p(inode->i_gid))
-		res >>= 3;		/* needs cleaning? */
+// 屏蔽码由低3 位组成，因此清除所有高比特位。
+	mode &= 0007;
+// 如果文件名对应的i 节点不存在，则返回出错码。
+	if (!(inode=namei(filename)))
+		return -EACCES;
+// 取文件的属性码，并释放该i 节点。
+	i_mode = res = inode->i_mode & 0777;
 	iput(inode);
-	if ((res & mode) == mode)
+// 如果当前进程是该文件的宿主，则取文件宿主属性。
+	if (current->uid == inode->i_uid)
+		res >>= 6;
+// 否则如果当前进程是与该文件同属一组，则取文件组属性。
+	else if (current->gid == inode->i_gid)
+		res >>= 6;
+// 如果文件属性具有查询的属性位，则访问许可，返回0。
+	if ((res & 0007 & mode) == mode)
 		return 0;
-	/*
-	 * XXX we are doing this test last because we really should be
-	 * swapping the effective with the real user id (temporarily),
-	 * and then calling suser() routine.  If we do call the
-	 * suser() routine, it needs to be called last. 
-	 *
-	 * XXX nope.  suser() is inappropriate and swapping the ids while
-	 * decomposing the path would be racy.
-	 */
+/*
+ * XXX 我们最后才做下面的测试，因为我们实际上需要交换有效用户id 和
+ * 真实用户id（临时地），然后才调用suser()函数。如果我们确实要调用
+ * suser()函数，则需要最后才被调用。 
+ */
+// 如果当前用户id 为0（超级用户）并且屏蔽码执行位是0 或文件可以被任何人访问，则返回0。
 	if ((!current->uid) &&
-	    (S_ISDIR(i_mode) || !(mode & S_IXOTH) || (i_mode & S_IXUGO)))
+	    (!(mode & 1) || (i_mode & 0111)))
 		return 0;
+	// 否则返回出错码。
 	return -EACCES;
 }
 
-asmlinkage int sys_chdir(const char * filename)
+//// 改变当前工作目录系统调用函数。
+// 参数filename 是目录名。
+// 操作成功则返回0，否则返回出错码。
+int sys_chdir(const char * filename)
 {
-	struct inode * inode;
-	int error;
+	struct m_inode * inode;
 
-	error = namei(filename,&inode);
-	if (error)
-		return error;
-	if (!S_ISDIR(inode->i_mode)) {
-		iput(inode);
-		return -ENOTDIR;
-	}
-	if (!permission(inode,MAY_EXEC)) {
-		iput(inode);
-		return -EACCES;
-	}
-	iput(current->pwd);
-	current->pwd = inode;
-	return (0);
-}
-
-asmlinkage int sys_fchdir(unsigned int fd)
-{
-	struct inode * inode;
-	struct file * file;
-
-	if (fd >= NR_OPEN || !(file = current->filp[fd]))
-		return -EBADF;
-	if (!(inode = file->f_inode))
+// 如果文件名对应的i 节点不存在，则返回出错码。
+	if (!(inode = namei(filename)))
 		return -ENOENT;
-	if (!S_ISDIR(inode->i_mode))
-		return -ENOTDIR;
-	if (!permission(inode,MAY_EXEC))
-		return -EACCES;
-	iput(current->pwd);
-	current->pwd = inode;
-	inode->i_count++;
-	return (0);
-}
-
-asmlinkage int sys_chroot(const char * filename)
-{
-	struct inode * inode;
-	int error;
-
-	error = namei(filename,&inode);
-	if (error)
-		return error;
+// 如果该i 节点不是目录的i 节点，则释放该节点，返回出错码。
 	if (!S_ISDIR(inode->i_mode)) {
 		iput(inode);
 		return -ENOTDIR;
 	}
-	if (!suser()) {
+// 释放当前进程原工作目录i 节点，并指向该新置的工作目录i 节点。返回0。
+	iput(current->pwd);
+	current->pwd = inode;
+	return (0);
+}
+
+//// 改变根目录系统调用函数。
+// 将指定的路径名改为根目录'/'。
+// 如果操作成功则返回0，否则返回出错码。
+int sys_chroot(const char * filename)
+{
+	struct m_inode * inode;
+
+// 如果文件名对应的i 节点不存在，则返回出错码。
+	if (!(inode=namei(filename)))
+		return -ENOENT;
+// 如果该i 节点不是目录的i 节点，则释放该节点，返回出错码。
+	if (!S_ISDIR(inode->i_mode)) {
 		iput(inode);
-		return -EPERM;
+		return -ENOTDIR;
 	}
+// 释放当前进程的根目录i 节点，并重置为这里指定目录名的i 节点，返回0。
 	iput(current->root);
 	current->root = inode;
 	return (0);
 }
 
-asmlinkage int sys_fchmod(unsigned int fd, mode_t mode)
+//// 修改文件属性系统调用函数。
+// 参数filename 是文件名，mode 是新的文件属性。
+// 若操作成功则返回0，否则返回出错码。
+int sys_chmod(const char * filename,int mode)
 {
-	struct inode * inode;
-	struct file * file;
+	struct m_inode * inode;
 
-	if (fd >= NR_OPEN || !(file = current->filp[fd]))
-		return -EBADF;
-	if (!(inode = file->f_inode))
+// 如果文件名对应的i 节点不存在，则返回出错码。
+	if (!(inode=namei(filename)))
 		return -ENOENT;
-	if ((current->euid != inode->i_uid) && !suser())
-		return -EPERM;
-	if (IS_RDONLY(inode))
-		return -EROFS;
-	if (mode == (mode_t) -1)
-		mode = inode->i_mode;
-	inode->i_mode = (mode & S_IALLUGO) | (inode->i_mode & ~S_IALLUGO);
-	if (!suser() && !in_group_p(inode->i_gid))
-		inode->i_mode &= ~S_ISGID;
-	inode->i_ctime = CURRENT_TIME;
-	inode->i_dirt = 1;
-	return notify_change(NOTIFY_MODE, inode);
-}
-
-asmlinkage int sys_chmod(const char * filename, mode_t mode)
-{
-	struct inode * inode;
-	int error;
-
-	error = namei(filename,&inode);
-	if (error)
-		return error;
+// 如果当前进程的有效用户id 不等于文件i 节点的用户id，并且当前进程不是超级用户，则释放该
+// 文件i 节点，返回出错码。
 	if ((current->euid != inode->i_uid) && !suser()) {
 		iput(inode);
-		return -EPERM;
+		return -EACCES;
 	}
-	if (IS_RDONLY(inode)) {
-		iput(inode);
-		return -EROFS;
-	}
-	if (mode == (mode_t) -1)
-		mode = inode->i_mode;
-	inode->i_mode = (mode & S_IALLUGO) | (inode->i_mode & ~S_IALLUGO);
-	if (!suser() && !in_group_p(inode->i_gid))
-		inode->i_mode &= ~S_ISGID;
-	inode->i_ctime = CURRENT_TIME;
+// 重新设置i 节点的文件属性，并置该i 节点已修改标志。释放该i 节点，返回0。
+	inode->i_mode = (mode & 07777) | (inode->i_mode & ~07777);
 	inode->i_dirt = 1;
-	error = notify_change(NOTIFY_MODE, inode);
 	iput(inode);
-	return error;
+	return 0;
 }
 
-asmlinkage int sys_fchown(unsigned int fd, uid_t user, gid_t group)
+//// 修改文件宿主系统调用函数。
+// 参数filename 是文件名，uid 是用户标识符(用户id)，gid 是组id。
+// 若操作成功则返回0，否则返回出错码。
+int sys_chown(const char * filename,int uid,int gid)
 {
-	struct inode * inode;
-	struct file * file;
+	struct m_inode * inode;
 
-	if (fd >= NR_OPEN || !(file = current->filp[fd]))
-		return -EBADF;
-	if (!(inode = file->f_inode))
+// 如果文件名对应的i 节点不存在，则返回出错码。
+	if (!(inode=namei(filename)))
 		return -ENOENT;
-	if (IS_RDONLY(inode))
-		return -EROFS;
-	if (user == (uid_t) -1)
-		user = inode->i_uid;
-	if (group == (gid_t) -1)
-		group = inode->i_gid;
-	if ((current->euid == inode->i_uid && user == inode->i_uid &&
-	     (in_group_p(group) || group == inode->i_gid)) ||
-	    suser()) {
-		inode->i_uid = user;
-		inode->i_gid = group;
-		inode->i_ctime = CURRENT_TIME;
-		inode->i_dirt = 1;
-		return notify_change(NOTIFY_UIDGID, inode);
-	}
-	return -EPERM;
-}
-
-asmlinkage int sys_chown(const char * filename, uid_t user, gid_t group)
-{
-	struct inode * inode;
-	int error;
-
-	error = lnamei(filename,&inode);
-	if (error)
-		return error;
-	if (IS_RDONLY(inode)) {
+// 若当前进程不是超级用户，则释放该i 节点，返回出错码。
+	if (!suser()) {
 		iput(inode);
-		return -EROFS;
+		return -EACCES;
 	}
-	if (user == (uid_t) -1)
-		user = inode->i_uid;
-	if (group == (gid_t) -1)
-		group = inode->i_gid;
-	if ((current->euid == inode->i_uid && user == inode->i_uid &&
-	     (in_group_p(group) || group == inode->i_gid)) ||
-	    suser()) {
-		inode->i_uid = user;
-		inode->i_gid = group;
-		inode->i_ctime = CURRENT_TIME;
-		inode->i_dirt = 1;
-		error = notify_change(NOTIFY_UIDGID, inode);
-		iput(inode);
-		return error;
-	}
+// 设置文件对应i 节点的用户id 和组id，并置i 节点已经修改标志，释放该i 节点，返回0。
+	inode->i_uid=uid;
+	inode->i_gid=gid;
+	inode->i_dirt=1;
 	iput(inode);
-	return -EPERM;
+	return 0;
 }
 
-/*
- * Note that while the flag value (low two bits) for sys_open means:
- *	00 - read-only
- *	01 - write-only
- *	10 - read-write
- *	11 - special
- * it is changed into
- *	00 - no permissions needed
- *	01 - read-permission
- *	10 - write-permission
- *	11 - read-write
- * for the internal routines (ie open_namei()/follow_link() etc). 00 is
- * used by symlinks.
- */
-int do_open(const char * filename,int flags,int mode)
+//// 打开（或创建）文件系统调用函数。
+// 参数filename 是文件名，flag 是打开文件标志：只读O_RDONLY、只写O_WRONLY 或读写O_RDWR，
+// 以及O_CREAT、O_EXCL、O_APPEND 等其它一些标志的组合，若本函数创建了一个新文件，则mode
+// 用于指定使用文件的许可属性，这些属性有S_IRWXU(文件宿主具有读、写和执行权限)、S_IRUSR
+// (用户具有读文件权限)、S_IRWXG(组成员具有读、写和执行权限)等等。对于新创建的文件，这些
+// 属性只应用于将来对文件的访问，创建了只读文件的打开调用也将返回一个可读写的文件句柄。
+// 若操作成功则返回文件句柄(文件描述符)，否则返回出错码。(参见sys/stat.h, fcntl.h)
+int sys_open(const char * filename,int flag,int mode)
 {
-	struct inode * inode;
+	struct m_inode * inode;
 	struct file * f;
-	int flag,error,fd;
+	int i,fd;
 
+// 将用户设置的模式与进程的模式屏蔽码相与，产生许可的文件模式。
+	mode &= 0777 & ~current->umask;
+// 搜索进程结构中文件结构指针数组，查找一个空闲项，若已经没有空闲项，则返回出错码。
 	for(fd=0 ; fd<NR_OPEN ; fd++)
 		if (!current->filp[fd])
 			break;
 	if (fd>=NR_OPEN)
-		return -EMFILE;
-	FD_CLR(fd,&current->close_on_exec);
-	f = get_empty_filp();
-	if (!f)
-		return -ENFILE;
-	current->filp[fd] = f;
-	f->f_flags = flag = flags;
-	f->f_mode = (flag+1) & O_ACCMODE;
-	if (f->f_mode)
-		flag++;
-	if (flag & (O_TRUNC | O_CREAT))
-		flag |= 2;
-	error = open_namei(filename,flag,mode,&inode,NULL);
-	if (error) {
+		return -EINVAL;
+// 设置执行时关闭文件句柄位图，复位对应比特位。
+	current->close_on_exec &= ~(1<<fd);
+// 令f 指向文件表数组开始处。搜索空闲文件结构项(句柄引用计数为0 的项)，若已经没有空闲
+// 文件表结构项，则返回出错码。
+	f=0+file_table;
+	for (i=0 ; i<NR_FILE ; i++,f++)
+		if (!f->f_count) break;
+	if (i>=NR_FILE)
+		return -EINVAL;
+// 让进程的对应文件句柄的文件结构指针指向搜索到的文件结构，并令句柄引用计数递增1。
+	(current->filp[fd]=f)->f_count++;
+// 调用函数执行打开操作，若返回值小于0，则说明出错，释放刚申请到的文件结构，返回出错码。
+	if ((i=open_namei(filename,flag,mode,&inode))<0) {
 		current->filp[fd]=NULL;
-		f->f_count--;
-		return error;
+		f->f_count=0;
+		return i;
 	}
-
+/* ttys 有些特殊（ttyxx 主号==4，tty 主号==5）*/
+// 如果是字符设备文件，那么如果设备号是4 的话，则设置当前进程的tty 号为该i 节点的子设备号。
+// 并设置当前进程tty 对应的tty 表项的父进程组号等于进程的父进程组号。
+	if (S_ISCHR(inode->i_mode))
+		if (MAJOR(inode->i_zone[0])==4) {
+			if (current->leader && current->tty<0) {
+				current->tty = MINOR(inode->i_zone[0]);
+				tty_table[current->tty].pgrp = current->pgrp;
+			}
+// 否则如果该字符文件设备号是5 的话，若当前进程没有tty，则说明出错，释放i 节点和申请到的
+// 文件结构，返回出错码。
+		} else if (MAJOR(inode->i_zone[0])==5)
+			if (current->tty<0) {
+				iput(inode);
+				current->filp[fd]=NULL;
+				f->f_count=0;
+				return -EPERM;
+			}
+/* 同样对于块设备文件：需要检查盘片是否被更换 */
+// 如果打开的是块设备文件，则检查盘片是否更换，若更换则需要是高速缓冲中对应该设备的所有
+// 缓冲块失效。
+	if (S_ISBLK(inode->i_mode))
+		check_disk_change(inode->i_zone[0]);
+// 初始化文件结构。置文件结构属性和标志，置句柄引用计数为1，设置i 节点字段，文件读写指针
+// 初始化为0。返回文件句柄。
+	f->f_mode = inode->i_mode;
+	f->f_flags = flag;
+	f->f_count = 1;
 	f->f_inode = inode;
 	f->f_pos = 0;
-	f->f_reada = 0;
-	f->f_op = NULL;
-	if (inode->i_op)
-		f->f_op = inode->i_op->default_file_ops;
-	if (f->f_op && f->f_op->open) {
-		error = f->f_op->open(inode,f);
-		if (error) {
-			iput(inode);
-			f->f_count--;
-			current->filp[fd]=NULL;
-			return error;
-		}
-	}
-	f->f_flags &= ~(O_CREAT | O_EXCL | O_NOCTTY | O_TRUNC);
 	return (fd);
 }
 
-asmlinkage int sys_open(const char * filename,int flags,int mode)
+//// 创建文件系统调用函数。
+// 参数pathname 是路径名，mode 与上面的sys_open()函数相同。
+// 成功则返回文件句柄，否则返回出错码。
+int sys_creat(const char * pathname, int mode)
 {
-	char * tmp;
-	int error;
-
-	error = getname(filename, &tmp);
-	if (error)
-		return error;
-	error = do_open(tmp,flags,mode);
-	putname(tmp);
-	return error;
+	return sys_open(pathname, O_CREAT | O_TRUNC, mode);
 }
 
-asmlinkage int sys_creat(const char * pathname, int mode)
-{
-	return sys_open(pathname, O_CREAT | O_WRONLY | O_TRUNC, mode);
-}
-
-int close_fp(struct file *filp, unsigned int fd)
-{
-	struct inode *inode;
-
-	if (filp->f_count == 0) {
-		printk("VFS: Close: file count is 0\n");
-		return 0;
-	}
-	inode = filp->f_inode;
-	if (inode && S_ISREG(inode->i_mode))
-		fcntl_remove_locks(current, filp, fd);
-	if (filp->f_count > 1) {
-		filp->f_count--;
-		return 0;
-	}
-	if (filp->f_op && filp->f_op->release)
-		filp->f_op->release(inode,filp);
-	filp->f_count--;
-	filp->f_inode = NULL;
-	iput(inode);
-	return 0;
-}
-
-asmlinkage int sys_close(unsigned int fd)
+// 关闭文件系统调用函数。
+// 参数fd 是文件句柄。
+// 成功则返回0，否则返回出错码。
+int sys_close(unsigned int fd)
 {	
 	struct file * filp;
 
+// 若文件句柄值大于程序同时能打开的文件数，则返回出错码。
 	if (fd >= NR_OPEN)
-		return -EBADF;
-	FD_CLR(fd, &current->close_on_exec);
+		return -EINVAL;
+// 复位进程的执行时关闭文件句柄位图对应位。
+	current->close_on_exec &= ~(1<<fd);
+// 若该文件句柄对应的文件结构指针是NULL，则返回出错码。
 	if (!(filp = current->filp[fd]))
-		return -EBADF;
+		return -EINVAL;
+// 置该文件句柄的文件结构指针为NULL。
 	current->filp[fd] = NULL;
-	return (close_fp (filp, fd));
-}
-
-/*
- * This routine simulates a hangup on the tty, to arrange that users
- * are given clean terminals at login time.
- */
-asmlinkage int sys_vhangup(void)
-{
-	struct tty_struct *tty;
-
-	if (!suser())
-		return -EPERM;
-	/* See if there is a controlling tty. */
-	if (current->tty < 0)
-		return 0;
-	tty = TTY_TABLE(MINOR(current->tty));
-	tty_vhangup(tty);
-	return 0;
+// 若在关闭文件之前，对应文件结构中的句柄引用计数已经为0，则说明内核出错，死机。
+	if (filp->f_count == 0)
+		panic("Close: file count is 0");
+// 否则将对应文件结构的句柄引用计数减1，如果还不为0，则返回0（成功）。若已等于0，说明该
+// 文件已经没有句柄引用，则释放该文件i 节点，返回0。
+	if (--filp->f_count)
+		return (0);
+	iput(filp->f_inode);
+	return (0);
 }

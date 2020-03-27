@@ -1,841 +1,545 @@
 /*
- *  linux/kernel/sched.c
+ * linux/kernel/sched.c
  *
- *  Copyright (C) 1991, 1992  Linus Torvalds
+ * (C) 1991 Linus Torvalds
  */
 
 /*
- * 'sched.c' is the main kernel file. It contains scheduling primitives
- * (sleep_on, wakeup, schedule etc) as well as a number of simple system
- * call functions (type getpid(), which just extracts a field from
- * current-task
+ * 'sched.c'是主要的内核文件。其中包括有关调度的基本函数(sleep_on、wakeup、schedule 等)以及
+ * 一些简单的系统调用函数（比如getpid()，仅从当前任务中获取一个字段）。
  */
+#include <linux/sched.h>	// 调度程序头文件。定义了任务结构task_struct、第1 个初始任务
+// 的数据。还有一些以宏的形式定义的有关描述符参数设置和获取的
+// 嵌入式汇编函数程序。
+#include <linux/kernel.h>	// 内核头文件。含有一些内核常用函数的原形定义。
+#include <linux/sys.h>		// 系统调用头文件。含有72 个系统调用C 函数处理程序,以'sys_'开头。
+#include <linux/fdreg.h>	// 软驱头文件。含有软盘控制器参数的一些定义。
+#include <asm/system.h>		// 系统头文件。定义了设置或修改描述符/中断门等的嵌入式汇编宏。
+#include <asm/io.h>		// io 头文件。定义硬件端口输入/输出宏汇编语句。
+#include <asm/segment.h>	// 段操作头文件。定义了有关段寄存器操作的嵌入式汇编函数。
 
-#include <linux/config.h>
-#include <linux/signal.h>
-#include <linux/sched.h>
-#include <linux/timer.h>
-#include <linux/kernel.h>
-#include <linux/kernel_stat.h>
-#include <linux/sys.h>
-#include <linux/fdreg.h>
-#include <linux/errno.h>
-#include <linux/time.h>
-#include <linux/ptrace.h>
-#include <linux/segment.h>
-#include <linux/delay.h>
-#include <linux/interrupt.h>
+#include <signal.h>		// 信号头文件。定义信号符号常量，sigaction 结构，操作函数原型。
 
-#include <asm/system.h>
-#include <asm/io.h>
-#include <asm/segment.h>
+#define _S(nr) (1<<((nr)-1))	// 取信号nr 在信号位图中对应位的二进制数值。信号编号1-32。
+// 比如信号5 的位图数值 = 1<<(5-1) = 16 = 00010000b。
+#define _BLOCKABLE (~(_S(SIGKILL) | _S(SIGSTOP)))	// 除了SIGKILL 和SIGSTOP 信号以外其它都是
+// 可阻塞的(…10111111111011111111b)。
 
-#define TIMER_IRQ 0
-
-#include <linux/timex.h>
-
-/*
- * kernel variables
- */
-long tick = 1000000 / HZ;               /* timer interrupt period */
-volatile struct timeval xtime;		/* The current time */
-int tickadj = 500/HZ;			/* microsecs */
-
-/*
- * phase-lock loop variables
- */
-int time_status = TIME_BAD;     /* clock synchronization status */
-long time_offset = 0;           /* time adjustment (us) */
-long time_constant = 0;         /* pll time constant */
-long time_tolerance = MAXFREQ;  /* frequency tolerance (ppm) */
-long time_precision = 1; 	/* clock precision (us) */
-long time_maxerror = 0x70000000;/* maximum error */
-long time_esterror = 0x70000000;/* estimated error */
-long time_phase = 0;            /* phase offset (scaled us) */
-long time_freq = 0;             /* frequency offset (scaled ppm) */
-long time_adj = 0;              /* tick adjust (scaled 1 / HZ) */
-long time_reftime = 0;          /* time at last adjustment (s) */
-
-long time_adjust = 0;
-long time_adjust_step = 0;
-
-int need_resched = 0;
-
-/*
- * Tell us the machine setup..
- */
-int hard_math = 0;		/* set by boot/head.S */
-int x86 = 0;			/* set by boot/head.S to 3 or 4 */
-int ignore_irq13 = 0;		/* set if exception 16 works */
-int wp_works_ok = 0;		/* set if paging hardware honours WP */ 
-
-/*
- * Bus types ..
- */
-int EISA_bus = 0;
-
-extern int _setitimer(int, struct itimerval *, struct itimerval *);
-unsigned long * prof_buffer = NULL;
-unsigned long prof_len = 0;
-
-#define _S(nr) (1<<((nr)-1))
-
-extern void mem_use(void);
-
-extern int timer_interrupt(void);
-asmlinkage int system_call(void);
-
-static unsigned long init_kernel_stack[1024];
-struct task_struct init_task = INIT_TASK;
-
-unsigned long volatile jiffies=0;
-
-struct task_struct *current = &init_task;
-struct task_struct *last_task_used_math = NULL;
-
-struct task_struct * task[NR_TASKS] = {&init_task, };
-
-long user_stack [ PAGE_SIZE>>2 ] ;
-
-struct {
-	long * a;
-	short b;
-	} stack_start = { & user_stack [PAGE_SIZE>>2] , KERNEL_DS };
-
-struct kernel_stat kstat =
-	{ 0, 0, 0, { 0, 0, 0, 0 }, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
-
-/*
- * int 0x80 entry points.. Moved away from the header file, as
- * iBCS2 may also want to use the '<linux/sys.h>' headers..
- */
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-int sys_ni_syscall(void)
+// 显示任务号nr 的进程号、进程状态和内核堆栈空闲字节数（大约）。
+void show_task (int nr, struct task_struct *p)
 {
-	return -EINVAL;
+	int i, j = 4096 - sizeof (struct task_struct);
+
+	printk ("%d: pid=%d, state=%d, ", nr, p->pid, p->state);
+	i = 0;
+	while (i < j && !((char *) (p + 1))[i])	// 检测指定任务数据结构以后等于0 的字节数。
+		i++;
+	printk ("%d (of %d) chars free in kernel stack\n\r", i, j);
 }
 
-fn_ptr sys_call_table[] = { sys_setup, sys_exit, sys_fork, sys_read,
-sys_write, sys_open, sys_close, sys_waitpid, sys_creat, sys_link,
-sys_unlink, sys_execve, sys_chdir, sys_time, sys_mknod, sys_chmod,
-sys_chown, sys_break, sys_stat, sys_lseek, sys_getpid, sys_mount,
-sys_umount, sys_setuid, sys_getuid, sys_stime, sys_ptrace, sys_alarm,
-sys_fstat, sys_pause, sys_utime, sys_stty, sys_gtty, sys_access,
-sys_nice, sys_ftime, sys_sync, sys_kill, sys_rename, sys_mkdir,
-sys_rmdir, sys_dup, sys_pipe, sys_times, sys_prof, sys_brk, sys_setgid,
-sys_getgid, sys_signal, sys_geteuid, sys_getegid, sys_acct, sys_phys,
-sys_lock, sys_ioctl, sys_fcntl, sys_mpx, sys_setpgid, sys_ulimit,
-sys_olduname, sys_umask, sys_chroot, sys_ustat, sys_dup2, sys_getppid,
-sys_getpgrp, sys_setsid, sys_sigaction, sys_sgetmask, sys_ssetmask,
-sys_setreuid,sys_setregid, sys_sigsuspend, sys_sigpending,
-sys_sethostname, sys_setrlimit, sys_getrlimit, sys_getrusage,
-sys_gettimeofday, sys_settimeofday, sys_getgroups, sys_setgroups,
-sys_select, sys_symlink, sys_lstat, sys_readlink, sys_uselib,
-sys_swapon, sys_reboot, sys_readdir, sys_mmap, sys_munmap, sys_truncate,
-sys_ftruncate, sys_fchmod, sys_fchown, sys_getpriority, sys_setpriority,
-sys_profil, sys_statfs, sys_fstatfs, sys_ioperm, sys_socketcall,
-sys_syslog, sys_setitimer, sys_getitimer, sys_newstat, sys_newlstat,
-sys_newfstat, sys_uname, sys_iopl, sys_vhangup, sys_idle, sys_vm86,
-sys_wait4, sys_swapoff, sys_sysinfo, sys_ipc, sys_fsync, sys_sigreturn,
-sys_clone, sys_setdomainname, sys_newuname, sys_modify_ldt,
-sys_adjtimex, sys_mprotect, sys_sigprocmask, sys_create_module,
-sys_init_module, sys_delete_module, sys_get_kernel_syms, sys_quotactl,
-sys_getpgid, sys_fchdir, sys_bdflush };
+// 显示所有任务的任务号、进程号、进程状态和内核堆栈空闲字节数（大约）。
+void show_stat (void)
+{
+	int i;
 
-/* So we don't have to do any more manual updating.... */
-int NR_syscalls = sizeof(sys_call_table)/sizeof(fn_ptr);
-
-#ifdef __cplusplus
+	for (i = 0; i < NR_TASKS; i++)// NR_TASKS 是系统能容纳的最大进程（任务）数量（64 个），
+		if (task[i])		// 定义在include/kernel/sched.h 第4 行。
+			show_task (i, task[i]);
 }
-#endif
+
+// 定义每个时间片的滴答数?。
+#define LATCH (1193180/HZ)
+
+extern void mem_use (void);	// [??]没有任何地方定义和引用该函数。
+
+extern int timer_interrupt (void);	// 时钟中断处理程序(kernel/system_call.s,176)。
+extern int system_call (void);	// 系统调用中断处理程序(kernel/system_call.s,80)。
+
+union task_union
+{				// 定义任务联合(任务结构成员和stack 字符数组程序成员)。
+	struct task_struct task;	// 因为一个任务数据结构与其堆栈放在同一内存页中，所以
+	char stack[PAGE_SIZE];	// 从堆栈段寄存器ss 可以获得其数据段选择符。
+};
+
+static union task_union init_task = { INIT_TASK, };	// 定义初始任务的数据(sched.h 中)。
+
+long volatile jiffies;	// 从开机开始算起的滴答数时间值（10ms/滴答）。
+// 前面的限定符volatile，英文解释是易变、不稳定的意思。这里是要求gcc 不要对该变量进行优化
+// 处理，也不要挪动位置，因为也许别的程序会来修改它的值。
+long startup_time;		// 开机时间。从1970:0:0:0 开始计时的秒数。
+struct task_struct *current = &(init_task.task);	// 当前任务指针（初始化为初始任务）。
+struct task_struct *last_task_used_math = NULL;	// 使用过协处理器任务的指针。
+
+struct task_struct *task[NR_TASKS] = { &(init_task.task), };	// 定义任务指针数组。
+
+long user_stack[PAGE_SIZE >> 2];	// 定义系统堆栈指针，4K。指针指在最后一项。
+
+// 该结构用于设置堆栈ss:esp（数据段选择符，指针），见head.s，第23 行。
+struct
+{
+  long *a;
+  short b;
+}
+stack_start = {&user_stack[PAGE_SIZE >> 2], 0x10};
 
 /*
- *  'math_state_restore()' saves the current math information in the
- * old math state array, and gets the new ones from the current task
- *
- * Careful.. There are problems with IBM-designed IRQ13 behaviour.
- * Don't touch unless you *really* know how it works.
+ * 将当前协处理器内容保存到老协处理器状态数组中，并将当前任务的协处理器
+ * 内容加载进协处理器。
  */
-asmlinkage void math_state_restore(void)
+// 当任务被调度交换过以后，该函数用以保存原任务的协处理器状态（上下文）并恢复新调度进来的
+// 当前任务的协处理器执行状态。
+void math_state_restore ()
 {
-	__asm__ __volatile__("clts");
-	if (last_task_used_math == current)
-		return;
-	timer_table[COPRO_TIMER].expires = jiffies+50;
-	timer_active |= 1<<COPRO_TIMER;	
+	struct i387_struct *tmp;
+
+	if (last_task_used_math == current)	// 如果任务没变则返回(上一个任务就是当前任务)。
+		return;			// 这里所指的"上一个任务"是刚被交换出去的任务。
+ // __asm__ ("fwait");		// 在发送协处理器命令之前要先发WAIT 指令。
+	_asm fwait;
 	if (last_task_used_math)
-		__asm__("fnsave %0":"=m" (last_task_used_math->tss.i387));
-	else
-		__asm__("fnclex");
-	last_task_used_math = current;
-	if (current->used_math) {
-		__asm__("frstor %0": :"m" (current->tss.i387));
-	} else {
-		__asm__("fninit");
-		current->used_math=1;
+	{				// 如果上个任务使用了协处理器，则保存其状态。
+//      __asm__ ("fnsave %0"::"m" (last_task_used_math->tss.i387));
+		tmp = &last_task_used_math->tss.i387;
+		_asm mov ebx,tmp
+		_asm fnsave [ebx];
 	}
-	timer_active &= ~(1<<COPRO_TIMER);
+	last_task_used_math = current;	// 现在，last_task_used_math 指向当前任务，
+									// 以备当前任务被交换出去时使用。
+	if (current->used_math)
+	{				// 如果当前任务用过协处理器，则恢复其状态。
+//      __asm__ ("frstor %0"::"m" (current->tss.i387));
+		tmp = &current->tss.i387;
+		_asm mov ebx,tmp
+		_asm frstor [ebx];
+	}
+	else
+	{				// 否则的话说明是第一次使用，
+//      __asm__ ("fninit"::);	// 于是就向协处理器发初始化命令，
+		_asm fninit;
+		current->used_math = 1;	// 并设置使用了协处理器标志。
+	}
 }
-
-#ifndef CONFIG_MATH_EMULATION
-
-asmlinkage void math_emulate(long arg)
-{
-  printk("math-emulation not enabled and no coprocessor found.\n");
-  printk("killing %s.\n",current->comm);
-  send_sig(SIGFPE,current,1);
-  schedule();
-}
-
-#endif /* CONFIG_MATH_EMULATION */
-
-unsigned long itimer_ticks = 0;
-unsigned long itimer_next = ~0;
-static unsigned long lost_ticks = 0;
 
 /*
- *  'schedule()' is the scheduler function. It's a very simple and nice
- * scheduler: it's not perfect, but certainly works for most things.
- * The one thing you might take a look at is the signal-handler code here.
- *
- *   NOTE!!  Task 0 is the 'idle' task, which gets called when no other
- * tasks can run. It can not be killed, and it cannot sleep. The 'state'
- * information in task[0] is never used.
- *
- * The "confuse_gcc" goto is used only to get better assembly code..
- * Djikstra probably hates me.
+ * 'schedule()'是调度函数。这是个很好的代码！没有任何理由对它进行修改，因为它可以在所有的
+ * 环境下工作（比如能够对IO-边界处理很好的响应等）。只有一件事值得留意，那就是这里的信号
+ * 处理代码。
+ * 注意！！任务0 是个闲置('idle')任务，只有当没有其它任务可以运行时才调用它。它不能被杀
+ * 死，也不能睡眠。任务0 中的状态信息'state'是从来不用的。
  */
-asmlinkage void schedule(void)
+void schedule (void)
 {
-	int c;
-	struct task_struct * p;
-	struct task_struct * next;
-	unsigned long ticks;
+	int i, next, c;
+	struct task_struct **p;	// 任务结构指针的指针。
 
-/* check alarm, wake up any interruptible tasks that have got a signal */
+/* 检测alarm（进程的报警定时值），唤醒任何已得到信号的可中断任务 */
 
-	cli();
-	ticks = itimer_ticks;
-	itimer_ticks = 0;
-	itimer_next = ~0;
-	sti();
-	need_resched = 0;
-	p = &init_task;
-	for (;;) {
-		if ((p = p->next_task) == &init_task)
-			goto confuse_gcc1;
-		if (ticks && p->it_real_value) {
-			if (p->it_real_value <= ticks) {
-				send_sig(SIGALRM, p, 1);
-				if (!p->it_real_incr) {
-					p->it_real_value = 0;
-					goto end_itimer;
-				}
-				do {
-					p->it_real_value += p->it_real_incr;
-				} while (p->it_real_value <= ticks);
+// 从任务数组中最后一个任务开始检测alarm。
+	for (p = &LAST_TASK; p > &FIRST_TASK; --p)
+		if (*p)
+		{
+// 如果任务的alarm 时间已经过期(alarm<jiffies),则在信号位图中置SIGALRM 信号，然后清alarm。
+// jiffies 是系统从开机开始算起的滴答数（10ms/滴答）。定义在sched.h 第139 行。
+			if ((*p)->alarm && (*p)->alarm < jiffies)
+			{
+				(*p)->signal |= (1 << (SIGALRM - 1));
+				(*p)->alarm = 0;
 			}
-			p->it_real_value -= ticks;
-			if (p->it_real_value < itimer_next)
-				itimer_next = p->it_real_value;
+// 如果信号位图中除被阻塞的信号外还有其它信号，并且任务处于可中断状态，则置任务为就绪状态。
+// 其中'~(_BLOCKABLE & (*p)->blocked)'用于忽略被阻塞的信号，但SIGKILL 和SIGSTOP 不能被阻塞。
+			if (((*p)->signal & ~(_BLOCKABLE & (*p)->blocked)) &&
+					(*p)->state == TASK_INTERRUPTIBLE)
+				(*p)->state = TASK_RUNNING;	//置为就绪（可执行）状态。
 		}
-end_itimer:
-		if (p->state != TASK_INTERRUPTIBLE)
-			continue;
-		if (p->signal & ~p->blocked) {
-			p->state = TASK_RUNNING;
-			continue;
-		}
-		if (p->timeout && p->timeout <= jiffies) {
-			p->timeout = 0;
-			p->state = TASK_RUNNING;
-		}
-	}
-confuse_gcc1:
 
-/* this is the scheduler proper: */
-#if 0
-	/* give processes that go to sleep a bit higher priority.. */
-	/* This depends on the values for TASK_XXX */
-	/* This gives smoother scheduling for some things, but */
-	/* can be very unfair under some circumstances, so.. */
- 	if (TASK_UNINTERRUPTIBLE >= (unsigned) current->state &&
-	    current->counter < current->priority*2) {
-		++current->counter;
+  /* 这里是调度程序的主要部分 */
+
+	while (1)
+	{
+		c = -1;
+		next = 0;
+		i = NR_TASKS;
+		p = &task[NR_TASKS];
+// 这段代码也是从任务数组的最后一个任务开始循环处理，并跳过不含任务的数组槽。比较每个就绪
+// 状态任务的counter（任务运行时间的递减滴答计数）值，哪一个值大，运行时间还不长，next 就
+// 指向哪个的任务号。
+		while (--i)
+		{
+			if (!*--p)
+				continue;
+			if ((*p)->state == TASK_RUNNING && (*p)->counter > c)
+				c = (*p)->counter, next = i;
+		}
+      // 如果比较得出有counter 值大于0 的结果，则退出124 行开始的循环，执行任务切换（141 行）。
+		if (c)
+			break;
+      // 否则就根据每个任务的优先权值，更新每一个任务的counter 值，然后回到125 行重新比较。
+      // counter 值的计算方式为counter = counter /2 + priority。[右边counter=0??]
+		for (p = &LAST_TASK; p > &FIRST_TASK; --p)
+			if (*p)
+				(*p)->counter = ((*p)->counter >> 1) + (*p)->priority;
 	}
-#endif
-	c = -1;
-	next = p = &init_task;
-	for (;;) {
-		if ((p = p->next_task) == &init_task)
-			goto confuse_gcc2;
-		if (p->state == TASK_RUNNING && p->counter > c)
-			c = p->counter, next = p;
-	}
-confuse_gcc2:
-	if (!c) {
-		for_each_task(p)
-			p->counter = (p->counter >> 1) + p->priority;
-	}
-	if(current != next)
-		kstat.context_swtch++;
-	switch_to(next);
-	/* Now maybe reload the debug registers */
-	if(current->debugreg[7]){
-		loaddebug(0);
-		loaddebug(1);
-		loaddebug(2);
-		loaddebug(3);
-		loaddebug(6);
-	};
+	switch_to (next);		// 切换到任务号为next 的任务，并运行之。
 }
 
-asmlinkage int sys_pause(void)
+//// pause()系统调用。转换当前任务的状态为可中断的等待状态，并重新调度。
+// 该系统调用将导致进程进入睡眠状态，直到收到一个信号。该信号用于终止进程或者使进程调用
+// 一个信号捕获函数。只有当捕获了一个信号，并且信号捕获处理函数返回，pause()才会返回。
+// 此时pause()返回值应该是-1，并且errno 被置为EINTR。这里还没有完全实现（直到0.95 版）。
+int sys_pause (void)
 {
 	current->state = TASK_INTERRUPTIBLE;
-	schedule();
-	return -ERESTARTNOHAND;
-}
-
-/*
- * wake_up doesn't wake up stopped processes - they have to be awakened
- * with signals or similar.
- *
- * Note that this doesn't need cli-sti pairs: interrupts may not change
- * the wait-queue structures directly, but only call wake_up() to wake
- * a process. The process itself must remove the queue once it has woken.
- */
-void wake_up(struct wait_queue **q)
-{
-	struct wait_queue *tmp;
-	struct task_struct * p;
-
-	if (!q || !(tmp = *q))
-		return;
-	do {
-		if ((p = tmp->task) != NULL) {
-			if ((p->state == TASK_UNINTERRUPTIBLE) ||
-			    (p->state == TASK_INTERRUPTIBLE)) {
-				p->state = TASK_RUNNING;
-				if (p->counter > current->counter)
-					need_resched = 1;
-			}
-		}
-		if (!tmp->next) {
-			printk("wait_queue is bad (eip = %08lx)\n",((unsigned long *) q)[-1]);
-			printk("        q = %p\n",q);
-			printk("       *q = %p\n",*q);
-			printk("      tmp = %p\n",tmp);
-			break;
-		}
-		tmp = tmp->next;
-	} while (tmp != *q);
-}
-
-void wake_up_interruptible(struct wait_queue **q)
-{
-	struct wait_queue *tmp;
-	struct task_struct * p;
-
-	if (!q || !(tmp = *q))
-		return;
-	do {
-		if ((p = tmp->task) != NULL) {
-			if (p->state == TASK_INTERRUPTIBLE) {
-				p->state = TASK_RUNNING;
-				if (p->counter > current->counter)
-					need_resched = 1;
-			}
-		}
-		if (!tmp->next) {
-			printk("wait_queue is bad (eip = %08lx)\n",((unsigned long *) q)[-1]);
-			printk("        q = %p\n",q);
-			printk("       *q = %p\n",*q);
-			printk("      tmp = %p\n",tmp);
-			break;
-		}
-		tmp = tmp->next;
-	} while (tmp != *q);
-}
-
-void __down(struct semaphore * sem)
-{
-	struct wait_queue wait = { current, NULL };
-	add_wait_queue(&sem->wait, &wait);
-	current->state = TASK_UNINTERRUPTIBLE;
-	while (sem->count <= 0) {
-		schedule();
-		current->state = TASK_UNINTERRUPTIBLE;
-	}
-	current->state = TASK_RUNNING;
-	remove_wait_queue(&sem->wait, &wait);
-}
-
-static inline void __sleep_on(struct wait_queue **p, int state)
-{
-	unsigned long flags;
-	struct wait_queue wait = { current, NULL };
-
-	if (!p)
-		return;
-	if (current == task[0])
-		panic("task[0] trying to sleep");
-	current->state = state;
-	add_wait_queue(p, &wait);
-	save_flags(flags);
-	sti();
-	schedule();
-	remove_wait_queue(p, &wait);
-	restore_flags(flags);
-}
-
-void interruptible_sleep_on(struct wait_queue **p)
-{
-	__sleep_on(p,TASK_INTERRUPTIBLE);
-}
-
-void sleep_on(struct wait_queue **p)
-{
-	__sleep_on(p,TASK_UNINTERRUPTIBLE);
-}
-
-static struct timer_list * next_timer = NULL;
-
-void add_timer(struct timer_list * timer)
-{
-	unsigned long flags;
-	struct timer_list ** p;
-
-	if (!timer)
-		return;
-	timer->next = NULL;
-	p = &next_timer;
-	save_flags(flags);
-	cli();
-	while (*p) {
-		if ((*p)->expires > timer->expires) {
-			(*p)->expires -= timer->expires;
-			timer->next = *p;
-			break;
-		}
-		timer->expires -= (*p)->expires;
-		p = &(*p)->next;
-	}
-	*p = timer;
-	restore_flags(flags);
-}
-
-int del_timer(struct timer_list * timer)
-{
-	unsigned long flags;
-	unsigned long expires = 0;
-	struct timer_list **p;
-
-	p = &next_timer;
-	save_flags(flags);
-	cli();
-	while (*p) {
-		if (*p == timer) {
-			if ((*p = timer->next) != NULL)
-				(*p)->expires += timer->expires;
-			timer->expires += expires;
-			restore_flags(flags);
-			return 1;
-		}
-		expires += (*p)->expires;
-		p = &(*p)->next;
-	}
-	restore_flags(flags);
+	schedule ();
 	return 0;
 }
 
-unsigned long timer_active = 0;
-struct timer_struct timer_table[32];
-
-/*
- * Hmm.. Changed this, as the GNU make sources (load.c) seems to
- * imply that avenrun[] is the standard name for this kind of thing.
- * Nothing else seems to be standardized: the fractional size etc
- * all seem to differ on different machines.
- */
-unsigned long avenrun[3] = { 0,0,0 };
-
-/*
- * Nr of active tasks - counted in fixed-point numbers
- */
-static unsigned long count_active_tasks(void)
+// 把当前任务置为不可中断的等待状态，并让睡眠队列头的指针指向当前任务。
+// 只有明确地唤醒时才会返回。该函数提供了进程与中断处理程序之间的同步机制。
+// 函数参数*p 是放置等待任务的队列头指针。（参见列表后的说明）。
+void sleep_on (struct task_struct **p)
 {
-	struct task_struct **p;
-	unsigned long nr = 0;
+	struct task_struct *tmp;
 
-	for(p = &LAST_TASK; p > &FIRST_TASK; --p)
-		if (*p && ((*p)->state == TASK_RUNNING ||
-			   (*p)->state == TASK_UNINTERRUPTIBLE ||
-			   (*p)->state == TASK_SWAPPING))
-			nr += FIXED_1;
-	return nr;
-}
-
-static inline void calc_load(void)
-{
-	unsigned long active_tasks; /* fixed-point */
-	static int count = LOAD_FREQ;
-
-	if (count-- > 0)
+	// 若指针无效，则退出。（指针所指的对象可以是NULL，但指针本身不会为0)。
+	if (!p)
 		return;
-	count = LOAD_FREQ;
-	active_tasks = count_active_tasks();
-	CALC_LOAD(avenrun[0], EXP_1, active_tasks);
-	CALC_LOAD(avenrun[1], EXP_5, active_tasks);
-	CALC_LOAD(avenrun[2], EXP_15, active_tasks);
+	if (current == &(init_task.task))	// 如果当前任务是任务0，则死机(impossible!)。
+		panic ("task[0] trying to sleep");
+	tmp = *p;			// 让tmp 指向已经在等待队列上的任务(如果有的话)。
+	*p = current;			// 将睡眠队列头的等待指针指向当前任务。
+	current->state = TASK_UNINTERRUPTIBLE;	// 将当前任务置为不可中断的等待状态。
+	schedule ();			// 重新调度。
+// 只有当这个等待任务被唤醒时，调度程序才又返回到这里，则表示进程已被明确地唤醒。
+// 既然大家都在等待同样的资源，那么在资源可用时，就有必要唤醒所有等待该资源的进程。该函数
+// 嵌套调用，也会嵌套唤醒所有等待该资源的进程。然后系统会根据这些进程的优先条件，重新调度
+// 应该由哪个进程首先使用资源。也即让这些进程竞争上岗。
+	if (tmp)			// 若还存在等待的任务，则也将其置为就绪状态（唤醒）。
+		tmp->state = 0;
 }
 
-/*
- * this routine handles the overflow of the microsecond field
- *
- * The tricky bits of code to handle the accurate clock support
- * were provided by Dave Mills (Mills@UDEL.EDU) of NTP fame.
- * They were originally developed for SUN and DEC kernels.
- * All the kudos should go to Dave for this stuff.
- *
- * These were ported to Linux by Philip Gladstone.
- */
-static void second_overflow(void)
+// 将当前任务置为可中断的等待状态，并放入*p 指定的等待队列中。参见列表后对sleep_on()的说明。
+void interruptible_sleep_on (struct task_struct **p)
 {
-	long ltemp;
-	/* last time the cmos clock got updated */
-	static long last_rtc_update=0;
-	extern int set_rtc_mmss(unsigned long);
+	struct task_struct *tmp;
 
-	/* Bump the maxerror field */
-	time_maxerror = (0x70000000-time_maxerror < time_tolerance) ?
-	  0x70000000 : (time_maxerror + time_tolerance);
-
-	/* Run the PLL */
-	if (time_offset < 0) {
-		ltemp = (-(time_offset+1) >> (SHIFT_KG + time_constant)) + 1;
-		time_adj = ltemp << (SHIFT_SCALE - SHIFT_HZ - SHIFT_UPDATE);
-		time_offset += (time_adj * HZ) >> (SHIFT_SCALE - SHIFT_UPDATE);
-		time_adj = - time_adj;
-	} else if (time_offset > 0) {
-		ltemp = ((time_offset-1) >> (SHIFT_KG + time_constant)) + 1;
-		time_adj = ltemp << (SHIFT_SCALE - SHIFT_HZ - SHIFT_UPDATE);
-		time_offset -= (time_adj * HZ) >> (SHIFT_SCALE - SHIFT_UPDATE);
-	} else {
-		time_adj = 0;
-	}
-
-	time_adj += (time_freq >> (SHIFT_KF + SHIFT_HZ - SHIFT_SCALE))
-	    + FINETUNE;
-
-	/* Handle the leap second stuff */
-	switch (time_status) {
-		case TIME_INS:
-		/* ugly divide should be replaced */
-		if (xtime.tv_sec % 86400 == 0) {
-			xtime.tv_sec--; /* !! */
-			time_status = TIME_OOP;
-			printk("Clock: inserting leap second 23:59:60 GMT\n");
-		}
-		break;
-
-		case TIME_DEL:
-		/* ugly divide should be replaced */
-		if (xtime.tv_sec % 86400 == 86399) {
-			xtime.tv_sec++;
-			time_status = TIME_OK;
-			printk("Clock: deleting leap second 23:59:59 GMT\n");
-		}
-		break;
-
-		case TIME_OOP:
-		time_status = TIME_OK;
-		break;
-	}
-	if (xtime.tv_sec > last_rtc_update + 660)
-	  if (set_rtc_mmss(xtime.tv_sec) == 0)
-	    last_rtc_update = xtime.tv_sec;
-}
-
-/*
- * disregard lost ticks for now.. We don't care enough.
- */
-static void timer_bh(void * unused)
-{
-	unsigned long mask;
-	struct timer_struct *tp;
-
-	cli();
-	while (next_timer && next_timer->expires == 0) {
-		void (*fn)(unsigned long) = next_timer->function;
-		unsigned long data = next_timer->data;
-		next_timer = next_timer->next;
-		sti();
-		fn(data);
-		cli();
-	}
-	sti();
-	
-	for (mask = 1, tp = timer_table+0 ; mask ; tp++,mask += mask) {
-		if (mask > timer_active)
-			break;
-		if (!(mask & timer_active))
-			continue;
-		if (tp->expires > jiffies)
-			continue;
-		timer_active &= ~mask;
-		tp->fn();
-		sti();
-	}
-}
-
-/*
- * The int argument is really a (struct pt_regs *), in case the
- * interrupt wants to know from where it was called. The timer
- * irq uses this to decide if it should update the user or system
- * times.
- */
-static void do_timer(struct pt_regs * regs)
-{
-	unsigned long mask;
-	struct timer_struct *tp;
-
-	long ltemp;
-
-	/* Advance the phase, once it gets to one microsecond, then
-	 * advance the tick more.
-	 */
-	time_phase += time_adj;
-	if (time_phase < -FINEUSEC) {
-		ltemp = -time_phase >> SHIFT_SCALE;
-		time_phase += ltemp << SHIFT_SCALE;
-		xtime.tv_usec += tick + time_adjust_step - ltemp;
-	}
-	else if (time_phase > FINEUSEC) {
-		ltemp = time_phase >> SHIFT_SCALE;
-		time_phase -= ltemp << SHIFT_SCALE;
-		xtime.tv_usec += tick + time_adjust_step + ltemp;
-	} else
-		xtime.tv_usec += tick + time_adjust_step;
-
-	if (time_adjust)
+	if (!p)
+		return;
+	if (current == &(init_task.task))
+		panic ("task[0] trying to sleep");
+	tmp = *p;
+	*p = current;
+repeat:
+	current->state = TASK_INTERRUPTIBLE;
+	schedule ();
+// 如果等待队列中还有等待任务，并且队列头指针所指向的任务不是当前任务时，则将该等待任务置为
+// 可运行的就绪状态，并重新执行调度程序。当指针*p 所指向的不是当前任务时，表示在当前任务被放
+// 入队列后，又有新的任务被插入等待队列中，因此，既然本任务是可中断的，就应该首先执行所有
+// 其它的等待任务。
+	if (*p && *p != current)
 	{
-	    /* We are doing an adjtime thing. 
-	     *
-	     * Modify the value of the tick for next time.
-	     * Note that a positive delta means we want the clock
-	     * to run fast. This means that the tick should be bigger
-	     *
-	     * Limit the amount of the step for *next* tick to be
-	     * in the range -tickadj .. +tickadj
-	     */
-	     if (time_adjust > tickadj)
-	       time_adjust_step = tickadj;
-	     else if (time_adjust < -tickadj)
-	       time_adjust_step = -tickadj;
-	     else
-	       time_adjust_step = time_adjust;
-	     
-	    /* Reduce by this step the amount of time left  */
-	    time_adjust -= time_adjust_step;
+		(**p).state = 0;
+		goto repeat;
 	}
-	else
-	    time_adjust_step = 0;
-
-	if (xtime.tv_usec >= 1000000) {
-	    xtime.tv_usec -= 1000000;
-	    xtime.tv_sec++;
-	    second_overflow();
-	}
-
-	jiffies++;
-	calc_load();
-	if ((VM_MASK & regs->eflags) || (3 & regs->cs)) {
-		current->utime++;
-		if (current != task[0]) {
-			if (current->priority < 15)
-				kstat.cpu_nice++;
-			else
-				kstat.cpu_user++;
-		}
-		/* Update ITIMER_VIRT for current task if not in a system call */
-		if (current->it_virt_value && !(--current->it_virt_value)) {
-			current->it_virt_value = current->it_virt_incr;
-			send_sig(SIGVTALRM,current,1);
-		}
-	} else {
-		current->stime++;
-		if(current != task[0])
-			kstat.cpu_system++;
-#ifdef CONFIG_PROFILE
-		if (prof_buffer && current != task[0]) {
-			unsigned long eip = regs->eip;
-			eip >>= 2;
-			if (eip < prof_len)
-				prof_buffer[eip]++;
-		}
-#endif
-	}
-	if (current == task[0] || (--current->counter)<=0) {
-		current->counter=0;
-		need_resched = 1;
-	}
-	/* Update ITIMER_PROF for the current task */
-	if (current->it_prof_value && !(--current->it_prof_value)) {
-		current->it_prof_value = current->it_prof_incr;
-		send_sig(SIGPROF,current,1);
-	}
-	for (mask = 1, tp = timer_table+0 ; mask ; tp++,mask += mask) {
-		if (mask > timer_active)
-			break;
-		if (!(mask & timer_active))
-			continue;
-		if (tp->expires > jiffies)
-			continue;
-		mark_bh(TIMER_BH);
-	}
-	cli();
-	itimer_ticks++;
-	if (itimer_ticks > itimer_next)
-		need_resched = 1;
-	if (next_timer) {
-		if (next_timer->expires) {
-			next_timer->expires--;
-			if (!next_timer->expires)
-				mark_bh(TIMER_BH);
-		} else {
-			lost_ticks++;
-			mark_bh(TIMER_BH);
-		}
-	}
-	sti();
+// 下面一句代码有误，应该是*p = tmp，让队列头指针指向其余等待任务，否则在当前任务之前插入
+// 等待队列的任务均被抹掉了。参见图4.3。
+	*p = NULL;
+	if (tmp)
+		tmp->state = 0;
 }
 
-asmlinkage int sys_alarm(long seconds)
+// 唤醒指定任务*p。
+void wake_up (struct task_struct **p)
 {
-	struct itimerval it_new, it_old;
-
-	it_new.it_interval.tv_sec = it_new.it_interval.tv_usec = 0;
-	it_new.it_value.tv_sec = seconds;
-	it_new.it_value.tv_usec = 0;
-	_setitimer(ITIMER_REAL, &it_new, &it_old);
-	return(it_old.it_value.tv_sec + (it_old.it_value.tv_usec / 1000000));
+	if (p && *p)
+	{
+		(**p).state = 0;		// 置为就绪（可运行）状态。
+		*p = NULL;
+	}
 }
 
-asmlinkage int sys_getpid(void)
+/*
+ * 好了，从这里开始是一些有关软盘的子程序，本不应该放在内核的主要部分中的。将它们放在这里
+ * 是因为软驱需要一个时钟，而放在这里是最方便的办法。
+ */
+static struct task_struct *wait_motor[4] = { NULL, NULL, NULL, NULL };
+static int mon_timer[4] = { 0, 0, 0, 0 };
+static int moff_timer[4] = { 0, 0, 0, 0 };
+unsigned char current_DOR = 0x0C;	// 数字输出寄存器(初值：允许DMA 和请求中断、启动FDC)。
+
+// 指定软盘到正常运转状态所需延迟滴答数（时间）。
+// nr -- 软驱号(0-3)，返回值为滴答数。
+int ticks_to_floppy_on (unsigned int nr)
+{
+	extern unsigned char selected;	// 当前选中的软盘号(kernel/blk_drv/floppy.c,122)。
+	unsigned char mask = 0x10 << nr;	// 所选软驱对应数字输出寄存器中启动马达比特位。
+
+	if (nr > 3)
+		panic ("floppy_on: nr>3");	// 最多4 个软驱。
+	moff_timer[nr] = 10000;	/* 100 s = very big :-) */
+	cli ();			/* use floppy_off to turn it off */
+	mask |= current_DOR;
+// 如果不是当前软驱，则首先复位其它软驱的选择位，然后置对应软驱选择位。
+	if (!selected)
+	{
+		mask &= 0xFC;
+		mask |= nr;
+	}
+// 如果数字输出寄存器的当前值与要求的值不同，则向FDC 数字输出端口输出新值(mask)。并且如果
+// 要求启动的马达还没有启动，则置相应软驱的马达启动定时器值(HZ/2 = 0.5 秒或50 个滴答)。
+// 此后更新当前数字输出寄存器值current_DOR。
+	if (mask != current_DOR)
+	{
+		outb (mask, FD_DOR);
+		if ((mask ^ current_DOR) & 0xf0)
+			mon_timer[nr] = HZ / 2;
+		else if (mon_timer[nr] < 2)
+			mon_timer[nr] = 2;
+		current_DOR = mask;
+	}
+	sti ();
+	return mon_timer[nr];
+}
+
+// 等待指定软驱马达启动所需时间。
+void floppy_on (unsigned int nr)
+{
+	cli ();			// 关中断。
+	while (ticks_to_floppy_on (nr))	// 如果马达启动定时还没到，就一直把当前进程置
+		sleep_on (nr + wait_motor);	// 为不可中断睡眠状态并放入等待马达运行的队列中。
+	sti ();			// 开中断。
+}
+
+// 置关闭相应软驱马达停转定时器（3 秒）。
+void floppy_off (unsigned int nr)
+{
+	moff_timer[nr] = 3 * HZ;
+}
+
+// 软盘定时处理子程序。更新马达启动定时值和马达关闭停转计时值。该子程序是在时钟定时
+// 中断中被调用，因此每一个滴答(10ms)被调用一次，更新马达开启或停转定时器的值。如果某
+// 一个马达停转定时到，则将数字输出寄存器马达启动位复位。
+void do_floppy_timer (void)
+{
+	int i;
+	unsigned char mask = 0x10;
+
+	for (i = 0; i < 4; i++, mask <<= 1)
+	{
+		if (!(mask & current_DOR))	// 如果不是DOR 指定的马达则跳过。
+			continue;
+		if (mon_timer[i])
+		{
+			if (!--mon_timer[i])
+				wake_up (i + wait_motor);	// 如果马达启动定时到则唤醒进程。
+		}
+		else if (!moff_timer[i])
+		{			// 如果马达停转定时到则
+			current_DOR &= ~mask;	// 复位相应马达启动位，并
+			outb (current_DOR, FD_DOR);	// 更新数字输出寄存器。
+		}
+		else
+			moff_timer[i]--;	// 马达停转计时递减。
+	}
+}
+
+#define TIME_REQUESTS 64	// 最多可有64 个定时器链表（64 个任务）。
+
+// 定时器链表结构和定时器数组。
+static struct timer_list
+{
+	long jiffies;			// 定时滴答数。
+	void (*fn) ();		// 定时处理程序。
+	struct timer_list *next;	// 下一个定时器。
+}
+timer_list[TIME_REQUESTS], *next_timer = NULL;
+
+// 添加定时器。输入参数为指定的定时值(滴答数)和相应的处理程序指针。
+// jiffies – 以10 毫秒计的滴答数；*fn()- 定时时间到时执行的函数。
+void add_timer (long jiffies, void (*fn) ())
+{
+	struct timer_list *p;
+
+	// 如果定时处理程序指针为空，则退出。
+	if (!fn)
+		return;
+	cli ();
+	// 如果定时值<=0，则立刻调用其处理程序。并且该定时器不加入链表中。
+	if (jiffies <= 0)
+		(fn) ();
+	else
+	{
+		// 从定时器数组中，找一个空闲项。
+		for (p = timer_list; p < timer_list + TIME_REQUESTS; p++)
+			if (!p->fn)
+				break;
+		// 如果已经用完了定时器数组，则系统崩溃?。
+		if (p >= timer_list + TIME_REQUESTS)
+			panic ("No more time requests free");
+		// 向定时器数据结构填入相应信息。并链入链表头
+		p->fn = fn;
+		p->jiffies = jiffies;
+		p->next = next_timer;
+		next_timer = p;
+// 链表项按定时值从小到大排序。在排序时减去排在前面需要的滴答数，这样在处理定时器时只要
+// 查看链表头的第一项的定时是否到期即可。[[?? 这段程序好象没有考虑周全。如果新插入的定时
+// 器值 < 原来头一个定时器值时，也应该将所有后面的定时值均减去新的第1 个的定时值。]]
+		while (p->next && p->next->jiffies < p->jiffies)
+		{
+			p->jiffies -= p->next->jiffies;
+			fn = p->fn;
+			p->fn = p->next->fn;
+			p->next->fn = fn;
+			jiffies = p->jiffies;
+			p->jiffies = p->next->jiffies;
+			p->next->jiffies = jiffies;
+			p = p->next;
+		}
+	}
+	sti ();
+}
+
+//// 时钟中断C 函数处理程序，在kernel/system_call.s 中的_timer_interrupt（176 行）被调用。
+// 参数cpl 是当前特权级0 或3，0 表示内核代码在执行。
+// 对于一个进程由于执行时间片用完时，则进行任务切换。并执行一个计时更新工作。
+void do_timer (long cpl)
+{
+	extern int beepcount;		// 扬声器发声时间滴答数(kernel/chr_drv/console.c,697)
+	extern void sysbeepstop (void);	// 关闭扬声器(kernel/chr_drv/console.c,691)
+
+  // 如果发声计数次数到，则关闭发声。(向0x61 口发送命令，复位位0 和1。位0 控制8253
+  // 计数器2 的工作，位1 控制扬声器)。
+	if (beepcount)
+		if (!--beepcount)
+			sysbeepstop ();
+
+  // 如果当前特权级(cpl)为0（最高，表示是内核程序在工作），则将超级用户运行时间stime 递增；
+  // 如果cpl > 0，则表示是一般用户程序在工作，增加utime。
+	if (cpl)
+		current->utime++;
+	else
+		current->stime++;
+
+// 如果有用户的定时器存在，则将链表第1 个定时器的值减1。如果已等于0，则调用相应的处理
+// 程序，并将该处理程序指针置为空。然后去掉该项定时器。
+	if (next_timer)
+	{				// next_timer 是定时器链表的头指针(见270 行)。
+		next_timer->jiffies--;
+		while (next_timer && next_timer->jiffies <= 0)
+		{
+			void (*fn) ();	// 这里插入了一个函数指针定义！！！??
+
+			fn = next_timer->fn;
+			next_timer->fn = NULL;
+			next_timer = next_timer->next;
+			(fn) ();		// 调用处理函数。
+		}
+	}
+// 如果当前软盘控制器FDC 的数字输出寄存器中马达启动位有置位的，则执行软盘定时程序(245 行)。
+	if (current_DOR & 0xf0)
+		do_floppy_timer ();
+	if ((--current->counter) > 0)
+		return;			// 如果进程运行时间还没完，则退出。
+	current->counter = 0;
+	if (!cpl)
+		return;			// 对于超级用户程序，不依赖counter 值进行调度。
+	schedule ();
+}
+
+// 系统调用功能 - 设置报警定时时间值(秒)。
+// 如果已经设置过alarm 值，则返回旧值，否则返回0。
+int sys_alarm (long seconds)
+{
+	int old = current->alarm;
+
+	if (old)
+		old = (old - jiffies) / HZ;
+	current->alarm = (seconds > 0) ? (jiffies + HZ * seconds) : 0;
+	return (old);
+}
+
+// 取当前进程号pid。
+int sys_getpid (void)
 {
 	return current->pid;
 }
 
-asmlinkage int sys_getppid(void)
+// 取父进程号ppid。
+int sys_getppid (void)
 {
-	return current->p_opptr->pid;
+	return current->father;
 }
 
-asmlinkage int sys_getuid(void)
+// 取用户号uid。
+int sys_getuid (void)
 {
 	return current->uid;
 }
 
-asmlinkage int sys_geteuid(void)
+// 取euid。
+int sys_geteuid (void)
 {
 	return current->euid;
 }
 
-asmlinkage int sys_getgid(void)
+// 取组号gid。
+int sys_getgid (void)
 {
 	return current->gid;
 }
 
-asmlinkage int sys_getegid(void)
+// 取egid。
+int sys_getegid (void)
 {
 	return current->egid;
 }
 
-asmlinkage int sys_nice(long increment)
+// 系统调用功能 -- 降低对CPU 的使用优先权（有人会用吗？?）。
+// 应该限制increment 大于0，否则的话,可使优先权增大！！
+int sys_nice (long increment)
 {
-	int newprio;
-
-	if (increment < 0 && !suser())
-		return -EPERM;
-	newprio = current->priority - increment;
-	if (newprio < 1)
-		newprio = 1;
-	if (newprio > 35)
-		newprio = 35;
-	current->priority = newprio;
+	if (current->priority - increment > 0)
+		current->priority -= increment;
 	return 0;
 }
 
-static void show_task(int nr,struct task_struct * p)
-{
-	static char * stat_nam[] = { "R", "S", "D", "Z", "T", "W" };
-
-	printk("%-8s %3d ", p->comm, (p == current) ? -nr : nr);
-	if (((unsigned) p->state) < sizeof(stat_nam)/sizeof(char *))
-		printk(stat_nam[p->state]);
-	else
-		printk(" ");
-	if (p == current)
-		printk(" current  ");
-	else
-		printk(" %08lX ", ((unsigned long *)p->tss.esp)[3]);
-	printk("%5lu %5d %6d ",
-		p->tss.esp - p->kernel_stack_page, p->pid, p->p_pptr->pid);
-	if (p->p_cptr)
-		printk("%5d ", p->p_cptr->pid);
-	else
-		printk("      ");
-	if (p->p_ysptr)
-		printk("%7d", p->p_ysptr->pid);
-	else
-		printk("       ");
-	if (p->p_osptr)
-		printk(" %5d\n", p->p_osptr->pid);
-	else
-		printk("\n");
-}
-
-void show_state(void)
+// 调度程序的初始化子程序。
+void sched_init (void)
 {
 	int i;
+	struct desc_struct *p;	// 描述符表结构指针。
 
-	printk("                         free                        sibling\n");
-	printk("  task             PC    stack   pid father child younger older\n");
-	for (i=0 ; i<NR_TASKS ; i++)
-		if (task[i])
-			show_task(i,task[i]);
-}
-
-void sched_init(void)
-{
-	int i;
-	struct desc_struct * p;
-
-	bh_base[TIMER_BH].routine = timer_bh;
-	if (sizeof(struct sigaction) != 16)
-		panic("Struct sigaction MUST be 16 bytes");
-	set_tss_desc(gdt+FIRST_TSS_ENTRY,&init_task.tss);
-	set_ldt_desc(gdt+FIRST_LDT_ENTRY,&default_ldt,1);
-	set_system_gate(0x80,&system_call);
-	p = gdt+2+FIRST_TSS_ENTRY;
-	for(i=1 ; i<NR_TASKS ; i++) {
+	if (sizeof (struct sigaction) != 16)	// sigaction 是存放有关信号状态的结构。
+		panic ("Struct sigaction MUST be 16 bytes");
+// 设置初始任务（任务0）的任务状态段描述符和局部数据表描述符(include/asm/system.h,65)。
+	set_tss_desc (gdt + FIRST_TSS_ENTRY, &(init_task.task.tss));
+	set_ldt_desc (gdt + FIRST_LDT_ENTRY, &(init_task.task.ldt));
+// 清任务数组和描述符表项（注意i=1 开始，所以初始任务的描述符还在）。
+	p = gdt + 2 + FIRST_TSS_ENTRY;
+	for (i = 1; i < NR_TASKS; i++)
+	{
 		task[i] = NULL;
-		p->a=p->b=0;
+		p->a = p->b = 0;
 		p++;
-		p->a=p->b=0;
+		p->a = p->b = 0;
 		p++;
 	}
-/* Clear NT, so that we won't have troubles with that later on */
-	__asm__("pushfl ; andl $0xffffbfff,(%esp) ; popfl");
-	load_TR(0);
-	load_ldt(0);
-	outb_p(0x34,0x43);		/* binary, mode 2, LSB/MSB, ch 0 */
-	outb_p(LATCH & 0xff , 0x40);	/* LSB */
-	outb(LATCH >> 8 , 0x40);	/* MSB */
-	if (request_irq(TIMER_IRQ,(void (*)(int)) do_timer)!=0)
-		panic("Could not allocate timer IRQ!");
+/* 清除标志寄存器中的位NT，这样以后就不会有麻烦 */
+// NT 标志用于控制程序的递归调用(Nested Task)。当NT 置位时，那么当前中断任务执行
+// iret 指令时就会引起任务切换。NT 指出TSS 中的back_link 字段是否有效。
+//  __asm__ ("pushfl ; andl $0xffffbfff,(%esp) ; popfl");	// 复位NT 标志。
+	_asm pushfd; _asm and dword ptr ss:[esp],0xffffbfff; _asm popfd;
+	ltr (0);			// 将任务0 的TSS 加载到任务寄存器tr。
+	lldt (0);			// 将局部描述符表加载到局部描述符表寄存器。
+// 注意！！是将GDT 中相应LDT 描述符的选择符加载到ldtr。只明确加载这一次，以后新任务
+// LDT 的加载，是CPU 根据TSS 中的LDT 项自动加载。
+// 下面代码用于初始化8253 定时器。
+	outb_p (0x36, 0x43);		/* binary, mode 3, LSB/MSB, ch 0 */
+	outb_p (LATCH & 0xff, 0x40);	/* LSB */// 定时值低字节。
+	outb (LATCH >> 8, 0x40);	/* MSB */// 定时值高字节。
+  // 设置时钟中断处理程序句柄（设置时钟中断门）。
+	set_intr_gate (0x20, &timer_interrupt);
+  // 修改中断控制器屏蔽码，允许时钟中断。
+	outb (inb_p (0x21) & ~0x01, 0x21);
+  // 设置系统调用中断门。
+	set_system_gate (0x80, &system_call);
 }

@@ -1,414 +1,275 @@
-#ifndef _LINUX_FS_H
-#define _LINUX_FS_H
-
 /*
- * This file has definitions for some important file table
- * structures etc.
- */
-
-#include <linux/linkage.h>
-#include <linux/limits.h>
-#include <linux/wait.h>
-#include <linux/types.h>
-#include <linux/dirent.h>
-#include <linux/vfs.h>
-#include <linux/net.h>
-
+* This file has definitions for some important file table
+* structures etc.
+*/
 /*
- * It's silly to have NR_OPEN bigger than NR_FILE, but I'll fix
- * that later. Anyway, now the file code is no longer dependent
- * on bitmaps in unsigned longs, but uses the new fd_set structure..
- *
- * Some programs (notably those using select()) may have to be 
- * recompiled to take full advantage of the new limits..
- */
-#undef NR_OPEN
-#define NR_OPEN 256
+* 本文件含有某些重要文件表结构的定义等。
+*/
 
-#define NR_INODE 2048	/* this should be bigger than NR_FILE */
-#define NR_FILE 1024	/* this can well be larger on a larger system */
-#define NR_SUPER 32
-#define NR_HASH 997
-#define NR_IHASH 131
-#define NR_FILE_LOCKS 64
-#define BLOCK_SIZE 1024
-#define BLOCK_SIZE_BITS 10
+#ifndef _FS_H
+#define _FS_H
 
-#define MAY_EXEC 1
-#define MAY_WRITE 2
-#define MAY_READ 4
+#include <sys/types.h>		// 类型头文件。定义了基本的系统数据类型。
+
+/* devices are as follows: (same as minix, so we can use the minix
+* file system. These are major numbers.)
+*
+* 0 - unused (nodev)
+* 1 - /dev/mem
+* 2 - /dev/fd
+* 3 - /dev/hd
+* 4 - /dev/ttyx
+* 5 - /dev/tty
+* 6 - /dev/lp
+* 7 - unnamed pipes
+*/
+/*
+* 系统所含的设备如下：（与minix 系统的一样，所以我们可以使用minix 的
+* 文件系统。以下这些是主设备号。）
+*
+* 0 - 没有用到（nodev）
+* 1 - /dev/mem 内存设备。
+* 2 - /dev/fd 软盘设备。
+* 3 - /dev/hd 硬盘设备。
+* 4 - /dev/ttyx tty 串行终端设备。
+* 5 - /dev/tty tty 终端设备。
+* 6 - /dev/lp 打印设备。
+* 7 - unnamed pipes 没有命名的管道。
+*/
+
+#define IS_SEEKABLE(x) ((x)>=1 && (x)<=3)	// 是否是可以寻找定位的设备。
 
 #define READ 0
 #define WRITE 1
-#define READA 2		/* read-ahead - don't pause */
-#define WRITEA 3	/* "write-ahead" - silly, but somewhat useful */
+#define READA 2			/* read-ahead - don't pause */
+#define WRITEA 3		/* "write-ahead" - silly, but somewhat useful */
 
-extern void buffer_init(void);
-extern unsigned long inode_init(unsigned long start, unsigned long end);
-extern unsigned long file_table_init(unsigned long start, unsigned long end);
+void buffer_init (long buffer_end);
 
-#define MAJOR(a) (int)((unsigned short)(a) >> 8)
-#define MINOR(a) (int)((unsigned short)(a) & 0xFF)
-#define MKDEV(a,b) ((int)((((a) & 0xff) << 8) | ((b) & 0xff)))
+#define MAJOR(a) (((unsigned)(a))>>8)	// 取高字节（主设备号）。
+#define MINOR(a) ((a)&0xff)	// 取低字节（次设备号）。
 
+#define NAME_LEN 14		// 名字长度值。
+#define ROOT_INO 1		// 根i 节点。
+
+#define I_MAP_SLOTS 8		// i 节点位图槽数。
+#define Z_MAP_SLOTS 8		// 逻辑块（区段块）位图槽数。
+#define SUPER_MAGIC 0x137F	// 文件系统魔数。
+
+#define NR_OPEN 20		// 打开文件数。
+#define NR_INODE 32
+#define NR_FILE 64
+#define NR_SUPER 8
+#define NR_HASH 307
+#define NR_BUFFERS nr_buffers
+#define BLOCK_SIZE 1024		// 数据块长度。
+#define BLOCK_SIZE_BITS 10	// 数据块长度所占比特位数。
 #ifndef NULL
-#define NULL ((void *) 0)
+#define NULL 0
 #endif
 
-#define NIL_FILP	((struct file *)0)
-#define SEL_IN		1
-#define SEL_OUT		2
-#define SEL_EX		4
+// 每个逻辑块可存放的i 节点数。
+#define INODES_PER_BLOCK ((BLOCK_SIZE)/(sizeof (struct d_inode)))
+// 每个逻辑块可存放的目录项数。
+#define DIR_ENTRIES_PER_BLOCK ((BLOCK_SIZE)/(sizeof (struct dir_entry)))
 
-/*
- * These are the fs-independent mount-flags: up to 16 flags are supported
- */
-#define MS_RDONLY    1 /* mount read-only */
-#define MS_NOSUID    2 /* ignore suid and sgid bits */
-#define MS_NODEV     4 /* disallow access to device special files */
-#define MS_NOEXEC    8 /* disallow program execution */
-#define MS_SYNC     16 /* writes are synced at once */
-#define	MS_REMOUNT  32 /* alter flags of a mounted FS */
+// 管道头、管道尾、管道大小、管道空？、管道满？、管道头指针递增。
+#define PIPE_HEAD(inode) ((inode).i_zone[0])
+#define PIPE_TAIL(inode) ((inode).i_zone[1])
+#define PIPE_SIZE(inode) ((PIPE_HEAD(inode)-PIPE_TAIL(inode))&(PAGE_SIZE-1))
+#define PIPE_EMPTY(inode) (PIPE_HEAD(inode)==PIPE_TAIL(inode))
+#define PIPE_FULL(inode) (PIPE_SIZE(inode)==(PAGE_SIZE-1))
+//#define INC_PIPE(head) \
+//__asm__( "incl %0\n\tandl $4095,%0":: "m" (head))
+#define INC_PIPE(head) _INC_PIPE(&(head))
+extern _inline void _INC_PIPE(unsigned long *head) {
+	_asm mov ebx,head
+	_asm inc dword ptr [ebx]
+	_asm and dword ptr [ebx],4095
+}
 
-/*
- * Flags that can be altered by MS_REMOUNT
- */
-#define MS_RMT_MASK (MS_RDONLY)
+typedef char buffer_block[BLOCK_SIZE];	// 块缓冲区。
 
-/*
- * Magic mount flag number. Has to be or-ed to the flag values.
- */
-#define MS_MGC_VAL 0xC0ED0000 /* magic flag number to indicate "new" flags */
-#define MS_MGC_MSK 0xffff0000 /* magic flag number mask */
-
-/*
- * Note that read-only etc flags are inode-specific: setting some file-system
- * flags just means all the inodes inherit those flags by default. It might be
- * possible to overrride it sevelctively if you really wanted to with some
- * ioctl() that is not currently implemented.
- *
- * Exception: MS_RDONLY is always applied to the entire file system.
- */
-#define IS_RDONLY(inode) (((inode)->i_sb) && ((inode)->i_sb->s_flags & MS_RDONLY))
-#define IS_NOSUID(inode) ((inode)->i_flags & MS_NOSUID)
-#define IS_NODEV(inode) ((inode)->i_flags & MS_NODEV)
-#define IS_NOEXEC(inode) ((inode)->i_flags & MS_NOEXEC)
-#define IS_SYNC(inode) ((inode)->i_flags & MS_SYNC)
-
-/* the read-only stuff doesn't really belong here, but any other place is
-   probably as bad and I don't want to create yet another include file. */
-
-#define BLKROSET 4701 /* set device read-only (0 = read-write) */
-#define BLKROGET 4702 /* get read-only status (0 = read_write) */
-#define BLKRRPART 4703 /* re-read partition table */
-#define BLKGETSIZE 4704 /* return device size */
-#define BLKFLSBUF 4705 /* flush buffer cache */
-
-/* These are a few other constants  only used by scsi  devices */
-
-#define SCSI_IOCTL_GET_IDLUN 0x5382
-
-/* Used to turn on and off tagged queueing for scsi devices */
-
-#define SCSI_IOCTL_TAGGED_ENABLE 0x5383
-#define SCSI_IOCTL_TAGGED_DISABLE 0x5384
-
-
-#define BMAP_IOCTL 1	/* obsolete - kept for compatibility */
-#define FIBMAP	   1	/* bmap access */
-#define FIGETBSZ   2	/* get the block size used for bmap */
-
-/* these flags tell notify_change what is being changed */
-
-#define NOTIFY_SIZE	1
-#define NOTIFY_MODE	2
-#define NOTIFY_TIME	4
-#define NOTIFY_UIDGID	8
-
-typedef char buffer_block[BLOCK_SIZE];
-
-struct buffer_head {
-	char * b_data;			/* pointer to data block (1024 bytes) */
-	unsigned long b_size;		/* block size */
-	unsigned long b_blocknr;	/* block number */
-	dev_t b_dev;			/* device (0 = free) */
-	unsigned short b_count;		/* users using this block */
-	unsigned char b_uptodate;
-	unsigned char b_dirt;		/* 0-clean,1-dirty */
-	unsigned char b_lock;		/* 0 - ok, 1 -locked */
-	unsigned char b_req;		/* 0 if the buffer has been invalidated */
-	struct wait_queue * b_wait;
-	struct buffer_head * b_prev;		/* doubly linked list of hash-queue */
-	struct buffer_head * b_next;
-	struct buffer_head * b_prev_free;	/* doubly linked list of buffers */
-	struct buffer_head * b_next_free;
-	struct buffer_head * b_this_page;	/* circular list of buffers in one page */
-	struct buffer_head * b_reqnext;		/* request queue */
+// 缓冲区头数据结构。（极为重要！！！）
+// 在程序中常用bh 来表示buffer_head 类型的缩写。
+struct buffer_head
+{
+  char *b_data;			/* pointer to data block (1024 bytes) *///指针。
+  unsigned long b_blocknr;	/* block number */// 块号。
+  unsigned short b_dev;		/* device (0 = free) */// 数据源的设备号。
+  unsigned char b_uptodate;	// 更新标志：表示数据是否已更新。
+  unsigned char b_dirt;		/* 0-clean,1-dirty *///修改标志:0 未修改,1 已修改.
+  unsigned char b_count;	/* users using this block */// 使用的用户数。
+  unsigned char b_lock;		/* 0 - ok, 1 -locked */// 缓冲区是否被锁定。
+  struct task_struct *b_wait;	// 指向等待该缓冲区解锁的任务。
+  struct buffer_head *b_prev;	// hash 队列上前一块（这四个指针用于缓冲区的管理）。
+  struct buffer_head *b_next;	// hash 队列上下一块。
+  struct buffer_head *b_prev_free;	// 空闲表上前一块。
+  struct buffer_head *b_next_free;	// 空闲表上下一块。
 };
 
-#include <linux/pipe_fs_i.h>
-#include <linux/minix_fs_i.h>
-#include <linux/ext_fs_i.h>
-#include <linux/ext2_fs_i.h>
-#include <linux/hpfs_fs_i.h>
-#include <linux/msdos_fs_i.h>
-#include <linux/iso_fs_i.h>
-#include <linux/nfs_fs_i.h>
-#include <linux/xia_fs_i.h>
-#include <linux/sysv_fs_i.h>
-
-struct inode {
-	dev_t		i_dev;
-	unsigned long	i_ino;
-	umode_t		i_mode;
-	nlink_t		i_nlink;
-	uid_t		i_uid;
-	gid_t		i_gid;
-	dev_t		i_rdev;
-	off_t		i_size;
-	time_t		i_atime;
-	time_t		i_mtime;
-	time_t		i_ctime;
-	unsigned long	i_blksize;
-	unsigned long	i_blocks;
-	struct semaphore i_sem;
-	struct inode_operations * i_op;
-	struct super_block * i_sb;
-	struct wait_queue * i_wait;
-	struct file_lock * i_flock;
-	struct vm_area_struct * i_mmap;
-	struct inode * i_next, * i_prev;
-	struct inode * i_hash_next, * i_hash_prev;
-	struct inode * i_bound_to, * i_bound_by;
-	struct inode * i_mount;
-	struct socket * i_socket;
-	unsigned short i_count;
-	unsigned short i_flags;
-	unsigned char i_lock;
-	unsigned char i_dirt;
-	unsigned char i_pipe;
-	unsigned char i_seek;
-	unsigned char i_update;
-	union {
-		struct pipe_inode_info pipe_i;
-		struct minix_inode_info minix_i;
-		struct ext_inode_info ext_i;
-		struct ext2_inode_info ext2_i;
-		struct hpfs_inode_info hpfs_i;
-		struct msdos_inode_info msdos_i;
-		struct iso_inode_info isofs_i;
-		struct nfs_inode_info nfs_i;
-		struct xiafs_inode_info xiafs_i;
-		struct sysv_inode_info sysv_i;
-	} u;
+// 磁盘上的索引节点(i 节点)数据结构。
+struct d_inode
+{
+  unsigned short i_mode;	// 文件类型和属性(rwx 位)。
+  unsigned short i_uid;		// 用户id（文件拥有者标识符）。
+  unsigned long i_size;		// 文件大小（字节数）。
+  unsigned long i_time;		// 修改时间（自1970.1.1:0 算起，秒）。
+  unsigned char i_gid;		// 组id(文件拥有者所在的组)。
+  unsigned char i_nlinks;	// 链接数（多少个文件目录项指向该i 节点）。
+  unsigned short i_zone[9];	// 直接(0-6)、间接(7)或双重间接(8)逻辑块号。
+// zone 是区的意思，可译成区段，或逻辑块。
 };
 
-struct file {
-	mode_t f_mode;
-	dev_t f_rdev;			/* needed for /dev/tty */
-	off_t f_pos;
-	unsigned short f_flags;
-	unsigned short f_count;
-	unsigned short f_reada;
-	struct file *f_next, *f_prev;
-	struct inode * f_inode;
-	struct file_operations * f_op;
+// 这是在内存中的i 节点结构。前7 项与d_inode 完全一样。
+struct m_inode
+{
+  unsigned short i_mode;	// 文件类型和属性(rwx 位)。
+  unsigned short i_uid;		// 用户id（文件拥有者标识符）。
+  unsigned long i_size;		// 文件大小（字节数）。
+  unsigned long i_mtime;	// 修改时间（自1970.1.1:0 算起，秒）。
+  unsigned char i_gid;		// 组id(文件拥有者所在的组)。
+  unsigned char i_nlinks;	// 文件目录项链接数。
+  unsigned short i_zone[9];	// 直接(0-6)、间接(7)或双重间接(8)逻辑块号。
+/* these are in memory also */
+  struct task_struct *i_wait;	// 等待该i 节点的进程。
+  unsigned long i_atime;	// 最后访问时间。
+  unsigned long i_ctime;	// i 节点自身修改时间。
+  unsigned short i_dev;		// i 节点所在的设备号。
+  unsigned short i_num;		// i 节点号。
+  unsigned short i_count;	// i 节点被使用的次数，0 表示该i 节点空闲。
+  unsigned char i_lock;		// 锁定标志。
+  unsigned char i_dirt;		// 已修改(脏)标志。
+  unsigned char i_pipe;		// 管道标志。
+  unsigned char i_mount;	// 安装标志。
+  unsigned char i_seek;		// 搜寻标志(lseek 时)。
+  unsigned char i_update;	// 更新标志。
 };
 
-struct file_lock {
-	struct file_lock *fl_next;	/* singly linked list */
-	struct task_struct *fl_owner;	/* NULL if on free list, for sanity checks */
-        unsigned int fl_fd;             /* File descriptor for this lock */
-	struct wait_queue *fl_wait;
-	char fl_type;
-	char fl_whence;
-	off_t fl_start;
-	off_t fl_end;
+// 文件结构（用于在文件句柄与i 节点之间建立关系）
+struct file
+{
+  unsigned short f_mode;	// 文件操作模式（RW 位）
+  unsigned short f_flags;	// 文件打开和控制的标志。
+  unsigned short f_count;	// 对应文件句柄（文件描述符）数。
+  struct m_inode *f_inode;	// 指向对应i 节点。
+  off_t f_pos;			// 文件位置（读写偏移值）。
 };
 
-#include <linux/minix_fs_sb.h>
-#include <linux/ext_fs_sb.h>
-#include <linux/ext2_fs_sb.h>
-#include <linux/hpfs_fs_sb.h>
-#include <linux/msdos_fs_sb.h>
-#include <linux/iso_fs_sb.h>
-#include <linux/nfs_fs_sb.h>
-#include <linux/xia_fs_sb.h>
-#include <linux/sysv_fs_sb.h>
-
-struct super_block {
-	dev_t s_dev;
-	unsigned long s_blocksize;
-	unsigned char s_blocksize_bits;
-	unsigned char s_lock;
-	unsigned char s_rd_only;
-	unsigned char s_dirt;
-	struct super_operations *s_op;
-	unsigned long s_flags;
-	unsigned long s_magic;
-	unsigned long s_time;
-	struct inode * s_covered;
-	struct inode * s_mounted;
-	struct wait_queue * s_wait;
-	union {
-		struct minix_sb_info minix_sb;
-		struct ext_sb_info ext_sb;
-		struct ext2_sb_info ext2_sb;
-		struct hpfs_sb_info hpfs_sb;
-		struct msdos_sb_info msdos_sb;
-		struct isofs_sb_info isofs_sb;
-		struct nfs_sb_info nfs_sb;
-		struct xiafs_sb_info xiafs_sb;
-		struct sysv_sb_info sysv_sb;
-	} u;
+// 内存中磁盘超级块结构。
+struct super_block
+{
+  unsigned short s_ninodes;	// 节点数。
+  unsigned short s_nzones;	// 逻辑块数。
+  unsigned short s_imap_blocks;	// i 节点位图所占用的数据块数。
+  unsigned short s_zmap_blocks;	// 逻辑块位图所占用的数据块数。
+  unsigned short s_firstdatazone;	// 第一个数据逻辑块号。
+  unsigned short s_log_zone_size;	// log(数据块数/逻辑块)。（以2 为底）。
+  unsigned long s_max_size;	// 文件最大长度。
+  unsigned short s_magic;	// 文件系统魔数。
+/* These are only in memory */
+  struct buffer_head *s_imap[8];	// i 节点位图缓冲块指针数组(占用8 块，可表示64M)。
+  struct buffer_head *s_zmap[8];	// 逻辑块位图缓冲块指针数组（占用8 块）。
+  unsigned short s_dev;		// 超级块所在的设备号。
+  struct m_inode *s_isup;	// 被安装的文件系统根目录的i 节点。(isup-super i)
+  struct m_inode *s_imount;	// 被安装到的i 节点。
+  unsigned long s_time;		// 修改时间。
+  struct task_struct *s_wait;	// 等待该超级块的进程。
+  unsigned char s_lock;		// 被锁定标志。
+  unsigned char s_rd_only;	// 只读标志。
+  unsigned char s_dirt;		// 已修改(脏)标志。
 };
 
-struct file_operations {
-	int (*lseek) (struct inode *, struct file *, off_t, int);
-	int (*read) (struct inode *, struct file *, char *, int);
-	int (*write) (struct inode *, struct file *, char *, int);
-	int (*readdir) (struct inode *, struct file *, struct dirent *, int);
-	int (*select) (struct inode *, struct file *, int, select_table *);
-	int (*ioctl) (struct inode *, struct file *, unsigned int, unsigned long);
-	int (*mmap) (struct inode *, struct file *, unsigned long, size_t, int, unsigned long);
-	int (*open) (struct inode *, struct file *);
-	void (*release) (struct inode *, struct file *);
-	int (*fsync) (struct inode *, struct file *);
+// 磁盘上超级块结构。上面125-132 行完全一样。
+struct d_super_block
+{
+  unsigned short s_ninodes;	// 节点数。
+  unsigned short s_nzones;	// 逻辑块数。
+  unsigned short s_imap_blocks;	// i 节点位图所占用的数据块数。
+  unsigned short s_zmap_blocks;	// 逻辑块位图所占用的数据块数。
+  unsigned short s_firstdatazone;	// 第一个数据逻辑块。
+  unsigned short s_log_zone_size;	// log(数据块数/逻辑块)。（以2 为底）。
+  unsigned long s_max_size;	// 文件最大长度。
+  unsigned short s_magic;	// 文件系统魔数。
 };
 
-struct inode_operations {
-	struct file_operations * default_file_ops;
-	int (*create) (struct inode *,const char *,int,int,struct inode **);
-	int (*lookup) (struct inode *,const char *,int,struct inode **);
-	int (*link) (struct inode *,struct inode *,const char *,int);
-	int (*unlink) (struct inode *,const char *,int);
-	int (*symlink) (struct inode *,const char *,int,const char *);
-	int (*mkdir) (struct inode *,const char *,int,int);
-	int (*rmdir) (struct inode *,const char *,int);
-	int (*mknod) (struct inode *,const char *,int,int,int);
-	int (*rename) (struct inode *,const char *,int,struct inode *,const char *,int);
-	int (*readlink) (struct inode *,char *,int);
-	int (*follow_link) (struct inode *,struct inode *,int,int,struct inode **);
-	int (*bmap) (struct inode *,int);
-	void (*truncate) (struct inode *);
-	int (*permission) (struct inode *, int);
+// 文件目录项结构。
+struct dir_entry
+{
+  unsigned short inode;		// i 节点。
+  char name[NAME_LEN];		// 文件名。
 };
 
-struct super_operations {
-	void (*read_inode) (struct inode *);
-	int (*notify_change) (int flags, struct inode *);
-	void (*write_inode) (struct inode *);
-	void (*put_inode) (struct inode *);
-	void (*put_super) (struct super_block *);
-	void (*write_super) (struct super_block *);
-	void (*statfs) (struct super_block *, struct statfs *);
-	int (*remount_fs) (struct super_block *, int *, char *);
-};
+extern struct m_inode inode_table[NR_INODE];	// 定义i 节点表数组（32 项）。
+extern struct file file_table[NR_FILE];	// 文件表数组（64 项）。
+extern struct super_block super_block[NR_SUPER];	// 超级块数组（8 项）。
+extern struct buffer_head *start_buffer;	// 缓冲区起始内存位置。
+extern int nr_buffers;		// 缓冲块数。
 
-struct file_system_type {
-	struct super_block *(*read_super) (struct super_block *, void *, int);
-	char *name;
-	int requires_dev;
-};
+//// 磁盘操作函数原型。
+// 检测驱动器中软盘是否改变。
+extern void check_disk_change (int dev);
+// 检测指定软驱中软盘更换情况。如果软盘更换了则返回1，否则返回0。
+extern int floppy_change (unsigned int nr);
+// 设置启动指定驱动器所需等待的时间（设置等待定时器）。
+extern int ticks_to_floppy_on (unsigned int dev);
+// 启动指定驱动器。
+extern void floppy_on (unsigned int dev);
+// 关闭指定的软盘驱动器。
+extern void floppy_off (unsigned int dev);
+//// 以下是文件系统操作管理用的函数原型。
+// 将i 节点指定的文件截为0。
+extern void truncate (struct m_inode *inode);
+// 刷新i 节点信息。
+extern void sync_inodes (void);
+// 等待指定的i 节点。
+extern void wait_on (struct m_inode *inode);
+// 逻辑块(区段，磁盘块)位图操作。取数据块block 在设备上对应的逻辑块号。
+extern int bmap (struct m_inode *inode, int block);
+// 创建数据块block 在设备上对应的逻辑块，并返回在设备上的逻辑块号。
+extern int create_block (struct m_inode *inode, int block);
+// 获取指定路径名的i 节点号。
+extern struct m_inode *namei (const char *pathname);
+// 根据路径名为打开文件操作作准备。
+extern int open_namei (const char *pathname, int flag, int mode,
+		       struct m_inode **res_inode);
+// 释放一个i 节点(回写入设备)。
+extern void iput (struct m_inode *inode);
+// 从设备读取指定节点号的一个i 节点。
+extern struct m_inode *iget (int dev, int nr);
+// 从i 节点表(inode_table)中获取一个空闲i 节点项。
+extern struct m_inode *get_empty_inode (void);
+// 获取（申请一）管道节点。返回为i 节点指针（如果是NULL 则失败）。
+extern struct m_inode *get_pipe_inode (void);
+// 在哈希表中查找指定的数据块。返回找到块的缓冲头指针。
+extern struct buffer_head *get_hash_table (int dev, int block);
+// 从设备读取指定块（首先会在hash 表中查找）。
+extern struct buffer_head *getblk (int dev, int block);
+// 读/写数据块。
+extern void ll_rw_block (int rw, struct buffer_head *bh);
+// 释放指定缓冲块。
+extern void brelse (struct buffer_head *buf);
+// 读取指定的数据块。
+extern struct buffer_head *bread (int dev, int block);
+// 读4 块缓冲区到指定地址的内存中。
+extern void bread_page (unsigned long addr, int dev, int b[4]);
+// 读取头一个指定的数据块，并标记后续将要读的块。
+extern struct buffer_head *breada (int dev, int block, ...);
+// 向设备dev 申请一个磁盘块（区段，逻辑块）。返回逻辑块号
+extern int new_block (int dev);
+// 释放设备数据区中的逻辑块(区段，磁盘块)block。复位指定逻辑块block 的逻辑块位图比特位。
+extern void free_block (int dev, int block);
+// 为设备dev 建立一个新i 节点，返回i 节点号。
+extern struct m_inode *new_inode (int dev);
+// 释放一个i 节点（删除文件时）。
+extern void free_inode (struct m_inode *inode);
+// 刷新指定设备缓冲区。
+extern int sync_dev (int dev);
+// 读取指定设备的超级块。
+extern struct super_block *get_super (int dev);
+extern int ROOT_DEV;
 
-#ifdef __KERNEL__
-
-asmlinkage int sys_open(const char *, int, int);
-asmlinkage int sys_close(unsigned int);		/* yes, it's really unsigned */
-
-extern int getname(const char * filename, char **result);
-extern void putname(char * name);
-
-extern int register_blkdev(unsigned int, const char *, struct file_operations *);
-extern int unregister_blkdev(unsigned int major, const char * name);
-extern int blkdev_open(struct inode * inode, struct file * filp);
-extern struct file_operations def_blk_fops;
-extern struct inode_operations blkdev_inode_operations;
-
-extern int register_chrdev(unsigned int, const char *, struct file_operations *);
-extern int unregister_chrdev(unsigned int major, const char * name);
-extern int chrdev_open(struct inode * inode, struct file * filp);
-extern struct file_operations def_chr_fops;
-extern struct inode_operations chrdev_inode_operations;
-
-extern void init_fifo(struct inode * inode);
-
-extern struct file_operations connecting_fifo_fops;
-extern struct file_operations read_fifo_fops;
-extern struct file_operations write_fifo_fops;
-extern struct file_operations rdwr_fifo_fops;
-extern struct file_operations read_pipe_fops;
-extern struct file_operations write_pipe_fops;
-extern struct file_operations rdwr_pipe_fops;
-
-extern struct file_system_type *get_fs_type(char *name);
-
-extern int fs_may_mount(dev_t dev);
-extern int fs_may_umount(dev_t dev, struct inode * mount_root);
-extern int fs_may_remount_ro(dev_t dev);
-
-extern struct file *first_file;
-extern int nr_files;
-extern struct super_block super_blocks[NR_SUPER];
-
-extern int shrink_buffers(unsigned int priority);
-
-extern int nr_buffers;
-extern int buffermem;
-extern int nr_buffer_heads;
-
-extern void check_disk_change(dev_t dev);
-extern void invalidate_inodes(dev_t dev);
-extern void invalidate_buffers(dev_t dev);
-extern int floppy_change(struct buffer_head * first_block);
-extern void sync_inodes(dev_t dev);
-extern void sync_dev(dev_t dev);
-extern int fsync_dev(dev_t dev);
-extern void sync_supers(dev_t dev);
-extern int bmap(struct inode * inode,int block);
-extern int notify_change(int flags, struct inode * inode);
-extern int namei(const char * pathname, struct inode ** res_inode);
-extern int lnamei(const char * pathname, struct inode ** res_inode);
-extern int permission(struct inode * inode,int mask);
-extern int open_namei(const char * pathname, int flag, int mode,
-	struct inode ** res_inode, struct inode * base);
-extern int do_mknod(const char * filename, int mode, dev_t dev);
-extern void iput(struct inode * inode);
-extern struct inode * __iget(struct super_block * sb,int nr,int crsmnt);
-extern struct inode * iget(struct super_block * sb,int nr);
-extern struct inode * get_empty_inode(void);
-extern void insert_inode_hash(struct inode *);
-extern void clear_inode(struct inode *);
-extern struct inode * get_pipe_inode(void);
-extern struct file * get_empty_filp(void);
-extern struct buffer_head * get_hash_table(dev_t dev, int block, int size);
-extern struct buffer_head * getblk(dev_t dev, int block, int size);
-extern void ll_rw_block(int rw, int nr, struct buffer_head * bh[]);
-extern void ll_rw_page(int rw, int dev, int nr, char * buffer);
-extern void ll_rw_swap_file(int rw, int dev, unsigned int *b, int nb, char *buffer);
-extern void brelse(struct buffer_head * buf);
-extern void set_blocksize(dev_t dev, int size);
-extern struct buffer_head * bread(dev_t dev, int block, int size);
-extern unsigned long bread_page(unsigned long addr,dev_t dev,int b[],int size,int prot);
-extern struct buffer_head * breada(dev_t dev,int block,...);
-extern void put_super(dev_t dev);
-extern dev_t ROOT_DEV;
-
-extern void show_buffers(void);
-extern void mount_root(void);
-
-extern int char_read(struct inode *, struct file *, char *, int);
-extern int block_read(struct inode *, struct file *, char *, int);
-extern int read_ahead[];
-
-extern int char_write(struct inode *, struct file *, char *, int);
-extern int block_write(struct inode *, struct file *, char *, int);
-
-extern int generic_mmap(struct inode *, struct file *, unsigned long, size_t, int, unsigned long);
-
-extern int block_fsync(struct inode *, struct file *);
-extern int file_fsync(struct inode *, struct file *);
-
-#endif /* __KERNEL__ */
+// 安装根文件系统。
+extern void mount_root (void);
 
 #endif

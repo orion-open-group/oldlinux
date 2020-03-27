@@ -1,472 +1,189 @@
-/*
+/* passed
  *  linux/init/main.c
  *
- *  Copyright (C) 1991, 1992  Linus Torvalds
+ *  (C) 1991  Linus Torvalds
  */
+#include <set_seg.h>
 
-#include <stdarg.h>
+#define __LIBRARY__	// 定义该变量是为了包括定义在unistd.h 中的内嵌汇编代码等信息。
 
-#include <asm/system.h>
-#include <asm/io.h>
-
-#include <linux/types.h>
-#include <linux/fcntl.h>
-#include <linux/config.h>
-#include <linux/sched.h>
-#include <linux/tty.h>
-#include <linux/head.h>
-#include <linux/unistd.h>
-#include <linux/string.h>
-#include <linux/timer.h>
-#include <linux/fs.h>
-#include <linux/ctype.h>
-#include <linux/delay.h>
-#include <linux/utsname.h>
-#include <linux/ioport.h>
-
-extern unsigned long * prof_buffer;
-extern unsigned long prof_len;
-extern char edata, end;
-extern char *linux_banner;
-asmlinkage void lcall7(void);
-struct desc_struct default_ldt;
+#include <unistd.h>
+#include <time.h> // 时间类型头文件。其中最主要定义了tm 结构和一些有关
+								// 时间的函数原形。
 
 /*
- * we need this inline - forking from kernel space will result
- * in NO COPY ON WRITE (!!!), until an execve is executed. This
- * is no problem, but for the stack. This is handled by not letting
- * main() use the stack at all after fork(). Thus, no function
- * calls - which means inline code for fork too, as otherwise we
- * would use the stack upon exit from 'fork()'.
+ * 我们需要下面这些内嵌语句- 从内核空间创建进程(forking)将导致没有写时复
+ * 制（COPY ON WRITE）!!!直到一个执行execve 调用。这对堆栈可能带来问题。处
+ * 理的方法是在fork()调用之后不让main()使用任何堆栈。因此就不能有函数调
+ * 用- 这意味着fork 也要使用内嵌的代码，否则我们在从fork()退出时就要使用堆栈了。
  *
- * Actually only pause and fork are needed inline, so that there
- * won't be any messing with the stack from main(), but we define
- * some others too.
+ * 实际上只有pause 和fork 需要使用内嵌方式，以保证从main()中不会弄乱堆栈，
+ * 但是我们同时还定义了其它一些函数。
  */
-#define __NR__exit __NR_exit
-static inline _syscall0(int,idle)
-static inline _syscall0(int,fork)
-static inline _syscall0(int,pause)
-static inline _syscall1(int,setup,void *,BIOS)
-static inline _syscall0(int,sync)
-static inline _syscall0(pid_t,setsid)
-static inline _syscall3(int,write,int,fd,const char *,buf,off_t,count)
-static inline _syscall1(int,dup,int,fd)
-static inline _syscall3(int,execve,const char *,file,char **,argv,char **,envp)
-static inline _syscall3(int,open,const char *,file,int,flag,int,mode)
-static inline _syscall1(int,close,int,fd)
-static inline _syscall1(int,_exit,int,exitcode)
-static inline _syscall3(pid_t,waitpid,pid_t,pid,int *,wait_stat,int,options)
+static _inline _syscall0(int,fork)// 是unistd.h 中的内嵌宏代码。以嵌入汇编的形式调用
+								// Linux 的系统调用中断0x80。该中断是所有系统调用的
+								// 入口。该条语句实际上是int fork()创建进程系统调用。
+								// syscall0 名称中最后的0 表示无参数，1 表示1 个参数。
+static _inline _syscall0(int,pause)// int pause()系统调用：暂停进程的执行，直到
+								// 收到一个信号。
+static _inline _syscall1(int,setup,void *,BIOS)// int setup(void * BIOS)系统调用，仅用于
+												// linux 初始化（仅在这个程序中被调用）。
+static _inline _syscall0(int,sync)// int sync()系统调用：更新文件系统。
 
-static inline pid_t wait(int * wait_stat)
-{
-	return waitpid(-1,wait_stat,0);
-}
+#include <linux/tty.h>	// tty 头文件，定义了有关tty_io，串行通信方面的
+									// 参数、常数。
+#include <linux/sched.h>	// 调度程序头文件，定义了任务结构task_struct、第1 个
+									// 初始任务的数据。还有一些以宏的形式定义的有关描述符
+									// 参数设置和获取的嵌入式汇编函数程序。
+#include <linux/head.h>	// head 头文件，定义了段描述符的简单结构，
+									// 和几个选择符常量。
+#include <asm/system.h>	// 系统头文件。以宏的形式定义了许多有关设置或修改
+									// 描述符/中断门等的嵌入式汇编子程序。
+#include <asm/io.h>		// io 头文件。以宏的嵌入汇编程序形式定义对io 端
+									// 口操作的函数。
+
+#include <stddef.h>	// 标准定义头文件。定义了NULL, offsetof(TYPE, MEMBER)。
+#include <stdarg.h>	// 标准参数头文件。以宏的形式定义变量参数列表。主要说
+								// 明了-个类型(va_list)和三个宏(va_start, va_arg 和
+								// va_end)，vsprintf、vprintf、vfprintf。
+#include <fcntl.h>	// 文件控制头文件。用于文件及其描述符的操作控制常数
+								// 符号的定义。
+#include <sys/types.h>// 类型头文件。定义了基本的系统数据类型。
+
+#include <linux/fs.h>// 文件系统头文件。定义文件表结构
+								//（file,buffer_head,m_inode 等）。
 
 static char printbuf[1024];
 
-extern int console_loglevel;
-
-extern char empty_zero_page[PAGE_SIZE];
-extern int vsprintf(char *,const char *,va_list);
-extern void init(void);
-extern void init_IRQ(void);
-extern long kmalloc_init (long,long);
-extern long blk_dev_init(long,long);
-extern long chr_dev_init(long,long);
-extern void floppy_init(void);
-extern void sock_init(void);
-extern long rd_init(long mem_start, int length);
-unsigned long net_dev_init(unsigned long, unsigned long);
-extern unsigned long simple_strtoul(const char *,char **,unsigned int);
-
-extern void hd_setup(char *str, int *ints);
-extern void bmouse_setup(char *str, int *ints);
-extern void eth_setup(char *str, int *ints);
-extern void xd_setup(char *str, int *ints);
-extern void mcd_setup(char *str, int *ints);
-extern void st0x_setup(char *str, int *ints);
-extern void tmc8xx_setup(char *str, int *ints);
-extern void t128_setup(char *str, int *ints);
-extern void generic_NCR5380_setup(char *str, int *intr);
-extern void aha152x_setup(char *str, int *ints);
-extern void sound_setup(char *str, int *ints);
-#ifdef CONFIG_SBPCD
-extern void sbpcd_setup(char *str, int *ints);
-#endif CONFIG_SBPCD
-
-#ifdef CONFIG_SYSVIPC
-extern void ipc_init(void);
-#endif
-#ifdef CONFIG_SCSI
-extern unsigned long scsi_dev_init(unsigned long, unsigned long);
-#endif
+extern int vsprintf();	// 送格式化输出到一字符串中（在kernel/vsprintf.c）。
+extern void init(void);	// 函数原形，初始化（在后面）。
+extern void blk_dev_init(void);// 块设备初始化子程序（kernel/blk_drv/ll_rw_blk.c）
+extern void chr_dev_init(void);// 字符设备初始化（kernel/chr_drv/tty_io.c）
+extern void hd_init(void);// 硬盘初始化程序（kernel/blk_drv/hd.c）
+extern void floppy_init(void);// 软驱初始化程序（kernel/blk_drv/floppy.c）
+extern void mem_init(long start, long end);// 内存管理初始化（mm/memory.c）
+extern long rd_init(long mem_start, int length);//虚拟盘初始化(kernel/blk_drv/ramdisk.c)
+extern long kernel_mktime(struct tm * tm);// 建立内核时间（秒）。
+extern long startup_time;// 内核启动时间（开机时间）（秒）。
 
 /*
- * This is set up by the setup-routine at boot-time
+ * 以下这些数据是由setup.s 程序在引导时间设置的。
  */
-#define PARAM	empty_zero_page
-#define EXT_MEM_K (*(unsigned short *) (PARAM+2))
-#define DRIVE_INFO (*(struct drive_info_struct *) (PARAM+0x80))
-#define SCREEN_INFO (*(struct screen_info *) (PARAM+0))
-#define MOUNT_ROOT_RDONLY (*(unsigned short *) (PARAM+0x1F2))
-#define RAMDISK_SIZE (*(unsigned short *) (PARAM+0x1F8))
-#define ORIG_ROOT_DEV (*(unsigned short *) (PARAM+0x1FC))
-#define AUX_DEVICE_INFO (*(unsigned char *) (PARAM+0x1FF))
+#define EXT_MEM_K (*(unsigned short *)0x90002)// 1M 以后的扩展内存大小（KB）。
+#define DRIVE_INFO (*(struct drive_info *)0x90080)// 硬盘参数表基址。
+#define ORIG_ROOT_DEV (*(unsigned short *)0x901FC)// 根文件系统所在设备号。
 
 /*
- * Boot command-line arguments
+ * 是啊，是啊，下面这段程序很差劲，但我不知道如何正确地实现，而且好象
+ * 它还能运行。如果有关于实时时钟更多的资料，那我很感兴趣。这些都是试
+ * 探出来的，以及看了一些bios 程序，呵！
  */
-#define MAX_INIT_ARGS 8
-#define MAX_INIT_ENVS 8
-#define COMMAND_LINE ((char *) (PARAM+2048))
-
-extern void time_init(void);
-
-static unsigned long memory_start = 0;	/* After mem_init, stores the */
-					/* amount of free user memory */
-static unsigned long memory_end = 0;
-static unsigned long low_memory_start = 0;
-
-static char term[21];
-int rows, cols;
-
-static char * argv_init[MAX_INIT_ARGS+2] = { "init", NULL, };
-static char * envp_init[MAX_INIT_ENVS+2] = { "HOME=/", term, NULL, };
-
-static char * argv_rc[] = { "/bin/sh", NULL };
-static char * envp_rc[] = { "HOME=/", term, NULL };
-
-static char * argv[] = { "-/bin/sh",NULL };
-static char * envp[] = { "HOME=/usr/root", term, NULL };
-
-struct drive_info_struct { char dummy[32]; } drive_info;
-struct screen_info screen_info;
-
-unsigned char aux_device_present;
-int ramdisk_size;
-int root_mountflags = 0;
-
-static char fpu_error = 0;
-
-static char command_line[80] = { 0, };
-
-char *get_options(char *str, int *ints) 
-{
-	char *cur = str;
-	int i=1;
-
-	while (cur && isdigit(*cur) && i <= 10) {
-		ints[i++] = simple_strtoul(cur,NULL,0);
-		if ((cur = strchr(cur,',')) != NULL)
-			cur++;
-	}
-	ints[0] = i-1;
-	return(cur);
-}
-
-struct {
-	char *str;
-	void (*setup_func)(char *, int *);
-} bootsetups[] = {
-	{ "reserve=", reserve_setup },
-#ifdef CONFIG_INET
-	{ "ether=", eth_setup },
-#endif
-#ifdef CONFIG_BLK_DEV_HD
-	{ "hd=", hd_setup },
-#endif
-#ifdef CONFIG_BUSMOUSE
-	{ "bmouse=", bmouse_setup },
-#endif
-#ifdef CONFIG_SCSI_SEAGATE
-	{ "st0x=", st0x_setup },
-	{ "tmc8xx=", tmc8xx_setup },
-#endif
-#ifdef CONFIG_SCSI_T128
-	{ "t128=", t128_setup },
-#endif
-#ifdef CONFIG_SCSI_GENERIC_NCR5380
-	{ "ncr5380=", generic_NCR5380_setup },
-#endif
-#ifdef CONFIG_SCSI_AHA152X
-        { "aha152x=", aha152x_setup},
-#endif
-#ifdef CONFIG_BLK_DEV_XD
-	{ "xd=", xd_setup },
-#endif
-#ifdef CONFIG_MCD
-	{ "mcd=", mcd_setup },
-#endif
-#ifdef CONFIG_SOUND
-	{ "sound=", sound_setup },
-#endif
-#ifdef CONFIG_SBPCD
-	{ "sbpcd=", sbpcd_setup },
-#endif CONFIG_SBPCD
-	{ 0, 0 }
-};
-
-int checksetup(char *line)
-{
-	int i = 0;
-	int ints[11];
-
-	while (bootsetups[i].str) {
-		int n = strlen(bootsetups[i].str);
-		if (!strncmp(line,bootsetups[i].str,n)) {
-			bootsetups[i].setup_func(get_options(line+n,ints), ints);
-			return(0);
-		}
-		i++;
-	}
-	return(1);
-}
-
-unsigned long loops_per_sec = 1;
-
-static void calibrate_delay(void)
-{
-	int ticks;
-
-	printk("Calibrating delay loop.. ");
-	while (loops_per_sec <<= 1) {
-		ticks = jiffies;
-		__delay(loops_per_sec);
-		ticks = jiffies - ticks;
-		if (ticks >= HZ) {
-			__asm__("mull %1 ; divl %2"
-				:"=a" (loops_per_sec)
-				:"d" (HZ),
-				 "r" (ticks),
-				 "0" (loops_per_sec)
-				:"dx");
-			printk("ok - %lu.%02lu BogoMips\n",
-				loops_per_sec/500000,
-				(loops_per_sec/5000) % 100);
-			return;
-		}
-	}
-	printk("failed\n");
-}
-	
-
+// 这段宏读取CMOS 实时时钟信息。
+// 0x70 是写端口号，0x80|addr 是要读取的CMOS 内存地址。
+// 0x71 是读端口号。
 /*
- * This is a simple kernel command line parsing function: it parses
- * the command line, and fills in the arguments/environment to init
- * as appropriate. Any cmd-line option is taken to be an environment
- * variable if it contains the character '='.
- *
- *
- * This routine also checks for options meant for the kernel - currently
- * only the "root=XXXX" option is recognized. These options are not given
- * to init - they are for internal kernel use only.
- */
-static void parse_options(char *line)
+#define CMOS_READ(addr) ({ \
+outb_p(0x80|addr,0x70); \
+inb_p(0x71); \
+})*/
+_inline unsigned char CMOS_READ(unsigned char addr)
 {
-	char *next;
-	char *devnames[] = { "hda", "hdb", "sda", "sdb", "sdc", "sdd", "sde", "fd", "xda", "xdb", NULL };
-	int devnums[]    = { 0x300, 0x340, 0x800, 0x810, 0x820, 0x830, 0x840, 0x200, 0xC00, 0xC40, 0};
-	int args, envs;
-
-	if (!*line)
-		return;
-	args = 0;
-	envs = 1;	/* TERM is set to 'console' by default */
-	next = line;
-	while ((line = next) != NULL) {
-		if ((next = strchr(line,' ')) != NULL)
-			*next++ = 0;
-		/*
-		 * check for kernel options first..
-		 */
-		if (!strncmp(line,"root=",5)) {
-			int n;
-			line += 5;
-			if (strncmp(line,"/dev/",5)) {
-				ROOT_DEV = simple_strtoul(line,NULL,16);
-				continue;
-			}
-			line += 5;
-			for (n = 0 ; devnames[n] ; n++) {
-				int len = strlen(devnames[n]);
-				if (!strncmp(line,devnames[n],len)) {
-					ROOT_DEV = devnums[n]+simple_strtoul(line+len,NULL,16);
-					break;
-				}
-			}
-		} else if (!strcmp(line,"ro"))
-			root_mountflags |= MS_RDONLY;
-		else if (!strcmp(line,"rw"))
-			root_mountflags &= ~MS_RDONLY;
-		else if (!strcmp(line,"debug"))
-			console_loglevel = 10;
-		else if (!strcmp(line,"no387")) {
-			hard_math = 0;
-			__asm__("movl %%cr0,%%eax\n\t"
-				"orl $0xE,%%eax\n\t"
-				"movl %%eax,%%cr0\n\t" : : : "ax");
-		} else
-			checksetup(line);
-		/*
-		 * Then check if it's an environment variable or
-		 * an option.
-		 */	
-		if (strchr(line,'=')) {
-			if (envs >= MAX_INIT_ENVS)
-				break;
-			envp_init[++envs] = line;
-		} else {
-			if (args >= MAX_INIT_ARGS)
-				break;
-			argv_init[++args] = line;
-		}
-	}
-	argv_init[args+1] = NULL;
-	envp_init[envs+1] = NULL;
+	outb_p(addr,0x70);
+	return inb_p(0x71);
 }
 
-static void copy_options(char * to, char * from)
-{
-	char c = ' ';
+// 将BCD 码转换成数字。
+#define BCD_TO_BIN(val) ((val)=((val)&15) + ((val)>>4)*10)
 
-	do {
-		if (c == ' ' && !memcmp("mem=", from, 4))
-			memory_end = simple_strtoul(from+4, &from, 0);
-		c = *(to++) = *(from++);
-	} while (c);
+// 该子程序取CMOS 时钟，并设置开机时间 startup_time(为从1970-1-1-0 时起到开机时的秒数)。
+static void time_init(void)
+{
+	struct tm time;
+
+	do {// 参见后面CMOS 内存列表。
+		time.tm_sec = CMOS_READ(0);
+		time.tm_min = CMOS_READ(2);
+		time.tm_hour = CMOS_READ(4);
+		time.tm_mday = CMOS_READ(7);
+		time.tm_mon = CMOS_READ(8);
+		time.tm_year = CMOS_READ(9);
+	} while (time.tm_sec != CMOS_READ(0));
+	BCD_TO_BIN(time.tm_sec);
+	BCD_TO_BIN(time.tm_min);
+	BCD_TO_BIN(time.tm_hour);
+	BCD_TO_BIN(time.tm_mday);
+	BCD_TO_BIN(time.tm_mon);
+	BCD_TO_BIN(time.tm_year);
+	time.tm_mon--;
+	startup_time = kernel_mktime(&time);
 }
 
-static void copro_timeout(void)
-{
-	fpu_error = 1;
-	timer_table[COPRO_TIMER].expires = jiffies+100;
-	timer_active |= 1<<COPRO_TIMER;
-	printk("387 failed: trying to reset\n");
-	send_sig(SIGFPE, last_task_used_math, 1);
-	outb_p(0,0xf1);
-	outb_p(0,0xf0);
-}
+static long memory_end = 0;// 机器具有的内存（字节数）。
+static long buffer_memory_end = 0;// 高速缓冲区末端地址。
+static long main_memory_start = 0;// 主内存（将用于分页）开始的位置。
 
-asmlinkage void start_kernel(void)
-{
+struct drive_info { char dummy[32]; } drive_info;// 用于存放硬盘参数表信息。
+
+void main_rename(void)		/* 这里确实是void，并没错。 */
+{			/* 在startup 程序(head.s)中就是这样假设的。 */
 /*
- * Interrupts are still disabled. Do necessary setups, then
- * enable them
+ * 此时中断仍被禁止着，做完必要的设置后就将其开启。
  */
-	set_call_gate(&default_ldt,lcall7);
+	// 下面这段代码用于保存：
+	// 根设备号 -> ROOT_DEV； 高速缓存末端地址 -> buffer_memory_end；
+	// 机器内存数 -> memory_end；主内存开始地址 -> main_memory_start；
  	ROOT_DEV = ORIG_ROOT_DEV;
  	drive_info = DRIVE_INFO;
- 	screen_info = SCREEN_INFO;
-	aux_device_present = AUX_DEVICE_INFO;
-	memory_end = (1<<20) + (EXT_MEM_K<<10);
-	memory_end &= PAGE_MASK;
-	ramdisk_size = RAMDISK_SIZE;
-	copy_options(command_line,COMMAND_LINE);
-#ifdef CONFIG_MAX_16M
-	if (memory_end > 16*1024*1024)
+	memory_end = (1<<20) + (EXT_MEM_K<<10);// 内存大小=1Mb 字节+扩展内存(k)*1024 字节。
+	memory_end &= 0xfffff000;			// 忽略不到4Kb（1 页）的内存数。
+	if (memory_end > 16*1024*1024)		// 如果内存超过16Mb，则按16Mb 计。
 		memory_end = 16*1024*1024;
+	if (memory_end > 12*1024*1024)		// 如果内存>12Mb，则设置缓冲区末端=4Mb
+		buffer_memory_end = 4*1024*1024;
+	else if (memory_end > 6*1024*1024)	// 否则如果内存>6Mb，则设置缓冲区末端=2Mb
+		buffer_memory_end = 2*1024*1024;
+	else
+		buffer_memory_end = 1*1024*1024;// 否则则设置缓冲区末端=1Mb
+	main_memory_start = buffer_memory_end;// 主内存起始位置=缓冲区末端；
+#ifdef RAMDISK	// 如果定义了虚拟盘，则主内存将减少。
+	main_memory_start += rd_init(main_memory_start, RAMDISK*1024);
 #endif
-	if (MOUNT_ROOT_RDONLY)
-		root_mountflags |= MS_RDONLY;
-	if ((unsigned long)&end >= (1024*1024)) {
-		memory_start = (unsigned long) &end;
-		low_memory_start = PAGE_SIZE;
-	} else {
-		memory_start = 1024*1024;
-		low_memory_start = (unsigned long) &end;
-	}
-	low_memory_start = PAGE_ALIGN(low_memory_start);
-	memory_start = paging_init(memory_start,memory_end);
-	if (strncmp((char*)0x0FFFD9, "EISA", 4) == 0)
-		EISA_bus = 1;
-	trap_init();
-	init_IRQ();
-	sched_init();
-	parse_options(command_line);
-#ifdef CONFIG_PROFILE
-	prof_buffer = (unsigned long *) memory_start;
-	prof_len = (unsigned long) &end;
-	prof_len >>= 2;
-	memory_start += prof_len * sizeof(unsigned long);
-#endif
-	memory_start = kmalloc_init(memory_start,memory_end);
-	memory_start = chr_dev_init(memory_start,memory_end);
-	memory_start = blk_dev_init(memory_start,memory_end);
-	sti();
-	calibrate_delay();
-#ifdef CONFIG_INET
-	memory_start = net_dev_init(memory_start,memory_end);
-#endif
-#ifdef CONFIG_SCSI
-	memory_start = scsi_dev_init(memory_start,memory_end);
-#endif
-	memory_start = inode_init(memory_start,memory_end);
-	memory_start = file_table_init(memory_start,memory_end);
-	mem_init(low_memory_start,memory_start,memory_end);
-	buffer_init();
-	time_init();
-	floppy_init();
-	sock_init();
-#ifdef CONFIG_SYSVIPC
-	ipc_init();
-#endif
-	sti();
-	
-	/*
-	 * check if exception 16 works correctly.. This is truly evil
-	 * code: it disables the high 8 interrupts to make sure that
-	 * the irq13 doesn't happen. But as this will lead to a lockup
-	 * if no exception16 arrives, it depends on the fact that the
-	 * high 8 interrupts will be re-enabled by the next timer tick.
-	 * So the irq13 will happen eventually, but the exception 16
-	 * should get there first..
-	 */
-	if (hard_math) {
-		unsigned short control_word;
+// 以下是内核进行所有方面的初始化工作。阅读时最好跟着调用的程序深入进去看，实在看
+// 不下去了，就先放一放，看下一个初始化调用-- 这是经验之谈:)
+	mem_init(main_memory_start,memory_end);
+	trap_init();	// 陷阱门（硬件中断向量）初始化。（kernel/traps.c）
+	blk_dev_init();	// 块设备初始化。（kernel/blk_dev/ll_rw_blk.c）
+	chr_dev_init();	// 字符设备初始化。（kernel/chr_dev/tty_io.c）空，为以后扩展做准备。
+	tty_init();		// tty 初始化。（kernel/chr_dev/tty_io.c）
+	time_init();	// 设置开机启动时间 -> startup_time。
+	sched_init();	// 调度程序初始化(加载了任务0 的tr, ldtr) （kernel/sched.c）
+	buffer_init(buffer_memory_end);// 缓冲管理初始化，建内存链表等。（fs/buffer.c）
+	hd_init();		// 硬盘初始化。（kernel/blk_dev/hd.c）
+	floppy_init();	// 软驱初始化。（kernel/blk_dev/floppy.c）
+	sti();			// 所有初始化工作都做完了，开启中断。
 
-		printk("Checking 386/387 coupling... ");
-		timer_table[COPRO_TIMER].expires = jiffies+50;
-		timer_table[COPRO_TIMER].fn = copro_timeout;
-		timer_active |= 1<<COPRO_TIMER;
-		__asm__("clts ; fninit ; fnstcw %0 ; fwait":"=m" (*&control_word));
-		control_word &= 0xffc0;
-		__asm__("fldcw %0 ; fwait": :"m" (*&control_word));
-		outb_p(inb_p(0x21) | (1 << 2), 0x21);
-		__asm__("fldz ; fld1 ; fdiv %st,%st(1) ; fwait");
-		timer_active &= ~(1<<COPRO_TIMER);
-		if (!fpu_error)
-			printk("Ok, fpu using %s error reporting.\n",
-				ignore_irq13?"exception 16":"irq13");
-	}
-#ifndef CONFIG_MATH_EMULATION
-	else {
-		printk("No coprocessor found and no math emulation present.\n");
-		printk("Giving up.\n");
-		for (;;) ;
-	}
-#endif
-
-	system_utsname.machine[1] = '0' + x86;
-	printk(linux_banner);
-
-	move_to_user_mode();
-	if (!fork())		/* we count on this going ok */
+// 下面过程通过在堆栈中设置的参数，利用中断返回指令切换到任务0。
+	move_to_user_mode();	// 移到用户模式。（include/asm/system.h）
+	if (!fork()) {		/* we count on this going ok */
 		init();
+	}
 /*
- * task[0] is meant to be used as an "idle" task: it may not sleep, but
- * it might do some general things like count free pages or it could be
- * used to implement a reasonable LRU algorithm for the paging routines:
- * anything that can be useful, but shouldn't take time from the real
- * processes.
- *
- * Right now task[0] just does a infinite idle loop.
+ * 注意!! 对于任何其它的任务，'pause()'将意味着我们必须等待收到一个信号才会返
+ * 回就绪运行态，但任务0（task0）是唯一的意外情况（参见'schedule()'），因为任
+ * 务0 在任何空闲时间里都会被激活（当没有其它任务在运行时），
+ * 因此对于任务0'pause()'仅意味着我们返回来查看是否有其它任务可以运行，如果没
+ * 有的话我们就回到这里，一直循环执行'pause()'。
  */
-	for(;;)
-		idle();
-}
+	for(;;) pause();
+} // end main
+
 
 static int printf(const char *fmt, ...)
+// 产生格式化信息并输出到标准输出设备stdout(1)，这里是指屏幕上显示。参数'*fmt'
+// 指定输出将采用的格式，参见各种标准C 语言书籍。该子程序正好是vsprintf 如何使
+// 用的一个例子。
+// 该程序使用vsprintf()将格式化的字符串放入printbuf 缓冲区，然后用write()
+// 将缓冲区的内容输出到标准设备（1--stdout）。
 {
 	va_list args;
 	int i;
@@ -477,40 +194,66 @@ static int printf(const char *fmt, ...)
 	return i;
 }
 
+static char * argv_rc[] = { "/bin/sh", NULL };// 调用执行程序时参数的字符串数组。
+static char * envp_rc[] = { "HOME=/", NULL };// 调用执行程序时的环境字符串数组。
+
+static char * argv[] = { "-/bin/sh",NULL };		// 同上。
+static char * envp[] = { "HOME=/usr/root", NULL };
+
 void init(void)
 {
 	int pid,i;
 
+// 读取硬盘参数包括分区表信息并建立虚拟盘和安装根文件系统设备。
+// 该函数是在25 行上的宏定义的，对应函数是sys_setup()，在kernel/blk_drv/hd.c。
 	setup((void *) &drive_info);
-	sprintf(term, "TERM=con%dx%d", ORIG_VIDEO_COLS, ORIG_VIDEO_LINES);
-	(void) open("/dev/tty1",O_RDWR,0);
-	(void) dup(0);
-	(void) dup(0);
 
-	execve("/etc/init",argv_init,envp_init);
-	execve("/bin/init",argv_init,envp_init);
-	execve("/sbin/init",argv_init,envp_init);
-	/* if this fails, fall through to original stuff */
+	(void) open("/dev/tty0",O_RDWR,0);	// 用读写访问方式打开设备“/dev/tty0”，
+										// 这里对应终端控制台。
+										// 返回的句柄号0 -- stdin 标准输入设备。
+	(void) dup(0);		// 复制句柄，产生句柄1 号-- stdout 标准输出设备。
+	(void) dup(0);		// 复制句柄，产生句柄2 号-- stderr 标准出错输出设备。
+	printf("%d buffers = %d bytes buffer space\n\r",NR_BUFFERS, \
+		NR_BUFFERS*BLOCK_SIZE);	// 打印缓冲区块数和总字节数，每块1024 字节。
+	printf("Free mem: %d bytes\n\r",memory_end-main_memory_start);//空闲内存字节数。
 
+// 下面fork()用于创建一个子进程(子任务)。对于被创建的子进程，fork()将返回0 值，
+// 对于原(父进程)将返回子进程的进程号。所以if (!(pid=fork())) {...} 内是子进程执行的内容。
+// 该子进程关闭了句柄0(stdin)，以只读方式打开/etc/rc 文件，并执行/bin/sh 程序，所带参数和
+// 环境变量分别由argv_rc 和envp_rc 数组给出。参见后面的描述。
 	if (!(pid=fork())) {
 		close(0);
 		if (open("/etc/rc",O_RDONLY,0))
-			_exit(1);
-		execve("/bin/sh",argv_rc,envp_rc);
-		_exit(2);
+			_exit(1);	// 如果打开文件失败，则退出(/lib/_exit.c)。
+		execve("/bin/sh",argv_rc,envp_rc);	// 装入/bin/sh 程序并执行。(/lib/execve.c)
+		_exit(2);	// 若execve()执行失败则退出(出错码2,“文件或目录不存在”)。
 	}
+
+// 下面是父进程执行的语句。wait()是等待子进程停止或终止，其返回值应是子进程的
+// 进程号(pid)。这三句的作用是父进程等待子进程的结束。&i 是存放返回状态信息的
+// 位置。如果wait()返回值不等于子进程号，则继续等待。
 	if (pid>0)
 		while (pid != wait(&i))
-			/* nothing */;
+		{	/* nothing */;}
+
+// --
+// 如果执行到这里，说明刚创建的子进程的执行已停止或终止了。下面循环中首先再创建
+// 一个子进程，如果出错，则显示“初始化程序创建子进程失败”的信息并继续执行。对
+// 于所创建的子进程关闭所有以前还遗留的句柄(stdin, stdout, stderr)，新创建一个
+// 会话并设置进程组号，然后重新打开/dev/tty0 作为stdin，并复制成stdout 和stderr。
+// 再次执行系统解释程序/bin/sh。但这次执行所选用的参数和环境数组另选了一套（见上面）。
+// 然后父进程再次运行wait()等待。如果子进程又停止了执行，则在标准输出上显示出错信息
+//		“子进程pid 停止了运行，返回码是i”，
+// 然后继续重试下去…，形成“大”死循环。
 	while (1) {
-		if ((pid = fork()) < 0) {
-			printf("Fork failed in init\n\r");
+		if ((pid=fork())<0) {
+			printf("Fork failed in init\r\n");
 			continue;
 		}
 		if (!pid) {
 			close(0);close(1);close(2);
 			setsid();
-			(void) open("/dev/tty1",O_RDWR,0);
+			(void) open("/dev/tty0",O_RDWR,0);
 			(void) dup(0);
 			(void) dup(0);
 			_exit(execve("/bin/sh",argv,envp));
@@ -521,5 +264,5 @@ void init(void)
 		printf("\n\rchild %d died with code %04x\n\r",pid,i);
 		sync();
 	}
-	_exit(0);
+	_exit(0);	/* NOTE! _exit, not exit() */
 }

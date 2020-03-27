@@ -1,230 +1,62 @@
+/* passed
+* linux/kernel/printk.c
+*
+* (C) 1991 Linus Torvalds
+*/
+#include <set_seg.h>
+
 /*
- *  linux/kernel/printk.c
- *
- *  Copyright (C) 1991, 1992  Linus Torvalds
- *
- * Modified to make sys_syslog() more flexible: added commands to
- * return the last 4k of kernel messages, regardless of whether
- * they've been read or not.  Added option to suppress kernel printk's
- * to the console.  Added hook for sending the console messages
- * elsewhere, in preparation for a serial line console (someday).
- * Ted Ts'o, 2/11/93.
- */
+* When in kernel-mode, we cannot use printf, as fs is liable to
+* point to 'interesting' things. Make a printf with fs-saving, and
+* all is well.
+*/
+/*
+* 当处于内核模式时，我们不能使用printf，因为寄存器fs 指向其它不感兴趣的地方。
+* 自己编制一个printf 并在使用前保存fs，一切就解决了。
+*/
+#include <stdarg.h>		// 标准参数头文件。以宏的形式定义变量参数列表。主要说明了-个
+// 类型(va_list)和三个宏(va_start, va_arg 和va_end)，用于
+// vsprintf、vprintf、vfprintf 函数。
+#include <stddef.h>		// 标准定义头文件。定义了NULL, offsetof(TYPE, MEMBER)。
 
-#include <stdarg.h>
-
-#include <asm/segment.h>
-#include <asm/system.h>
-
-#include <linux/errno.h>
-#include <linux/sched.h>
-#include <linux/kernel.h>
-
-#define LOG_BUF_LEN	4096
+#include <linux/kernel.h>	// 内核头文件。含有一些内核常用函数的原形定义。
 
 static char buf[1024];
 
-extern int vsprintf(char * buf, const char * fmt, va_list args);
-extern void console_print(const char *);
+// 下面该函数vsprintf()在linux/kernel/vsprintf.c 中92 行开始。
+extern int vsprintf (char *buf, const char *fmt, va_list args);
 
-#define DEFAULT_MESSAGE_LOGLEVEL 7 /* KERN_DEBUG */
-#define DEFAULT_CONSOLE_LOGLEVEL 7 /* anything more serious than KERN_DEBUG */
-
-unsigned long log_size = 0;
-struct wait_queue * log_wait = NULL;
-int console_loglevel = DEFAULT_CONSOLE_LOGLEVEL;
-
-static void (*console_print_proc)(const char *) = 0;
-static char log_buf[LOG_BUF_LEN];
-static unsigned long log_start = 0;
-static unsigned long logged_chars = 0;
-
-/*
- * Commands to sys_syslog:
- *
- * 	0 -- Close the log.  Currently a NOP.
- * 	1 -- Open the log. Currently a NOP.
- * 	2 -- Read from the log.
- * 	3 -- Read up to the last 4k of messages in the ring buffer.
- * 	4 -- Read and clear last 4k of messages in the ring buffer
- * 	5 -- Clear ring buffer.
- * 	6 -- Disable printk's to console
- * 	7 -- Enable printk's to console
- *	8 -- Set level of messages printed to console
- */
-asmlinkage int sys_syslog(int type, char * buf, int len)
+// 内核使用的显示函数。
+int printk (const char *fmt, ...)
 {
-	unsigned long i, j, count;
-	int do_clear = 0;
-	char c;
-	int error;
-
-	if ((type != 3) && !suser())
-		return -EPERM;
-	switch (type) {
-		case 0:		/* Close log */
-			return 0;
-		case 1:		/* Open log */
-			return 0;
-		case 2:		/* Read from log */
-			if (!buf || len < 0)
-				return -EINVAL;
-			if (!len)
-				return 0;
-			error = verify_area(VERIFY_WRITE,buf,len);
-			if (error)
-				return error;
-			cli();
-			while (!log_size) {
-				if (current->signal & ~current->blocked) {
-					sti();
-					return -ERESTARTSYS;
-				}
-				interruptible_sleep_on(&log_wait);
-			}
-			i = 0;
-			while (log_size && i < len) {
-				c = *((char *) log_buf+log_start);
-				log_start++;
-				log_size--;
-				log_start &= LOG_BUF_LEN-1;
-				sti();
-				put_fs_byte(c,buf);
-				buf++;
-				i++;
-				cli();
-			}
-			sti();
-			return i;
-		case 4:		/* Read/clear last kernel messages */
-			do_clear = 1; 
-			/* FALL THRU */
-		case 3:		/* Read last kernel messages */
-			if (!buf || len < 0)
-				return -EINVAL;
-			if (!len)
-				return 0;
-			error = verify_area(VERIFY_WRITE,buf,len);
-			if (error)
-				return error;
-			count = len;
-			if (count > LOG_BUF_LEN)
-				count = LOG_BUF_LEN;
-			if (count > logged_chars)
-				count = logged_chars;
-			j = log_start + log_size - count;
-			for (i = 0; i < count; i++) {
-				c = *((char *) log_buf+(j++ & (LOG_BUF_LEN-1)));
-				put_fs_byte(c, buf++);
-			}
-			if (do_clear)
-				logged_chars = 0;
-			return i;
-		case 5:		/* Clear ring buffer */
-			logged_chars = 0;
-			return 0;
-		case 6:		/* Disable logging to console */
-			console_loglevel = 1; /* only panic messages shown */
-			return 0;
-		case 7:		/* Enable logging to console */
-			console_loglevel = DEFAULT_CONSOLE_LOGLEVEL;
-			return 0;
-		case 8:
-			if (len < 0 || len > 8)
-				return -EINVAL;
-			console_loglevel = len;
-			return 0;
-	}
-	return -EINVAL;
-}
-
-
-asmlinkage int printk(const char *fmt, ...)
-{
-	va_list args;
+	va_list args;			// va_list 实际上是一个字符指针类型。
 	int i;
-	char *msg, *p, *buf_end;
-	static char msg_level = -1;
-	long flags;
 
-	save_flags(flags);
-	cli();
-	va_start(args, fmt);
-	i = vsprintf(buf + 3, fmt, args); /* hopefully i < sizeof(buf)-4 */
-	buf_end = buf + 3 + i;
-	va_end(args);
-	for (p = buf + 3; p < buf_end; p++) {
-		msg = p;
-		if (msg_level < 0) {
-			if (
-				p[0] != '<' ||
-				p[1] < '0' || 
-				p[1] > '7' ||
-				p[2] != '>'
-			) {
-				p -= 3;
-				p[0] = '<';
-				p[1] = DEFAULT_MESSAGE_LOGLEVEL - 1 + '0';
-				p[2] = '>';
-			} else
-				msg += 3;
-			msg_level = p[1] - '0';
-		}
-		for (; p < buf_end; p++) {
-			log_buf[(log_start+log_size) & (LOG_BUF_LEN-1)] = *p;
-			if (log_size < LOG_BUF_LEN)
-				log_size++;
-			else
-				log_start++;
-			logged_chars++;
-			if (*p == '\n')
-				break;
-		}
-		if (msg_level < console_loglevel && console_print_proc) {
-			char tmp = p[1];
-			p[1] = '\0';
-			(*console_print_proc)(msg);
-			p[1] = tmp;
-		}
-		if (*p == '\n')
-			msg_level = -1;
+	va_start (args, fmt);		// 参数处理开始函数。在（include/stdarg.h,13）
+	i = vsprintf (buf, fmt, args);	// 使用格式串fmt 将参数列表args 输出到buf 中。
+// 返回值i 等于输出字符串的长度。
+	va_end (args);		// 参数处理结束函数。
+	_asm{
+		push fs	// 保存fs。
+		push ds
+		pop fs	// 令fs = ds。
+		push i	// 将字符串长度压入堆栈(这三个入栈是调用参数)。
+		push offset buf	// 将buf 的地址压入堆栈。
+		push 0	// 将数值0 压入堆栈。是通道号channel。
+		call tty_write	// 调用tty_write 函数。(kernel/chr_drv/tty_io.c,290)。
+		add esp,8	// 跳过（丢弃）两个入栈参数(buf,channel)。
+		pop i	// 弹出字符串长度值，作为返回值。
+		pop fs		// 恢复原fs 寄存器。
 	}
-	restore_flags(flags);
-	wake_up_interruptible(&log_wait);
-	return i;
-}
-
-/*
- * The console driver calls this routine during kernel initialization
- * to register the console printing procedure with printk() and to
- * print any messages that were printed by the kernel before the
- * console driver was initialized.
- */
-void register_console(void (*proc)(const char *))
-{
-	int	i,j;
-	int	p = log_start;
-	char	buf[16];
-	char	msg_level = -1;
-	char	*q;
-
-	console_print_proc = proc;
-
-	for (i=0,j=0; i < log_size; i++) {
-		buf[j++] = log_buf[p];
-		p++; p &= LOG_BUF_LEN-1;
-		if (buf[j-1] != '\n' && i < log_size - 1 && j < sizeof(buf)-1)
-			continue;
-		buf[j] = 0;
-		q = buf;
-		if (msg_level < 0) {
-			msg_level = buf[1] - '0';
-			q = buf + 3;
-		}
-		if (msg_level < console_loglevel)
-			(*proc)(q);
-		if (buf[j-1] == '\n')
-			msg_level = -1;
-		j = 0;
-	}
+ /* __asm__ ("push %%fs\n\t"
+	   "push %%ds\n\t" "pop %%fs\n\t"
+	   "pushl %0\n\t"
+	   "pushl $_buf\n\t"
+	   "pushl $0\n\t"
+	   "call _tty_write\n\t"
+	   "addl $8,%%esp\n\t"
+	   "popl %0\n\t"
+	   "pop %%fs"
+::"r" (i):"ax", "cx", "dx");	// 通知编译器，寄存器ax,cx,dx 值可能已经改变。*/
+	return i;			// 返回字符串长度。
 }
