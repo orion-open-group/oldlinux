@@ -7,6 +7,13 @@
 ROOT_DEV = /dev/hdb1
 
 #
+# uncomment this if you want kernel profiling: the profile_shift is the
+# granularity of the profiling (5 = 32-byte granularity)
+#
+
+PROFILING = -DPROFILE_SHIFT=2
+
+#
 # uncomment the correct keyboard:
 #
 # The value of KBDFLAGS should be or'ed together from the following
@@ -66,18 +73,18 @@ LD86	=ld86 -0
 # Set it to -DSVGA_MODE=NORMAL_VGA if you just want the EGA/VGA mode.
 # The number is the same as you would ordinarily press at bootup.
 #
-#SVGA_MODE=	-DSVGA_MODE=1
+SVGA_MODE=	-DSVGA_MODE=1
 
 AS	=as
 LD	=ld
 HOSTCC	=gcc -static
-CC	=gcc -nostdinc -I$(KERNELHDRS)
+CC	=gcc -DKERNEL
 MAKE	=make
 CPP	=$(CC) -E
 AR	=ar
 
 ARCHIVES	=kernel/kernel.o mm/mm.o fs/fs.o net/net.o
-FILESYSTEMS	=fs/minix/minix.o fs/ext/ext.o fs/msdos/msdos.o
+FILESYSTEMS	=fs/minix/minix.o fs/ext/ext.o fs/msdos/msdos.o fs/proc/proc.o
 DRIVERS		=kernel/blk_drv/blk_drv.a kernel/chr_drv/chr_drv.a \
 		 kernel/blk_drv/scsi/scsi.a
 MATH		=kernel/math/math.a
@@ -87,7 +94,7 @@ SUBDIRS		=kernel mm fs net lib
 KERNELHDRS	=/usr/src/linux/include
 
 .c.s:
-	$(CC) $(CFLAGS) -S $<
+	$(CC) $(CFLAGS) -S -o $*.s $<
 .s.o:
 	$(AS) -c -o $*.o $<
 .c.o:
@@ -95,14 +102,21 @@ KERNELHDRS	=/usr/src/linux/include
 
 all:	Version Image
 
+lilo: Image
+	if [ -f /vmlinux ]; then mv /vmlinux /vmlinux.old; fi
+	dd if=Image of=/vmlinux
+	/etc/lilo/lilo -b /dev/hda /vmlinux
+
 linuxsubdirs: dummy
-	@for i in $(SUBDIRS); do (cd $$i; echo $$i; $(MAKE)) || exit; done
+	@for i in $(SUBDIRS); do (cd $$i && echo $$i && $(MAKE)) || exit; done
 
 Version:
 	@./makever.sh
-	@echo \#define UTS_RELEASE \"0.97-`cat .version`\" > include/linux/config_rel.h
-	@echo \#define UTS_VERSION \"`date +%D`\" > include/linux/config_ver.h
-	touch include/linux/config.h
+	@echo \#define UTS_RELEASE \"0.97.pl6-`cat .version`\" > tools/version.h
+	@echo \#define UTS_VERSION \"`date +%D`\" >> tools/version.h
+	@echo \#define LINUX_COMPILE_TIME \"`date +%T`\" >> tools/version.h
+	@echo \#define LINUX_COMPILE_BY \"`whoami`\" >> tools/version.h
+	@echo \#define LINUX_COMPILE_HOST \"`hostname`\" >> tools/version.h
 
 Image: boot/bootsect boot/setup tools/system tools/build
 	cp tools/system system.tmp
@@ -120,8 +134,13 @@ tools/build: tools/build.c
 
 boot/head.o: boot/head.s
 
-tools/system:	boot/head.o init/main.o linuxsubdirs
-	$(LD) $(LDFLAGS) -M boot/head.o init/main.o \
+tools/version.o: tools/version.c tools/version.h
+
+init/main.o: init/main.c
+	$(CC) $(CFLAGS) $(PROFILING) -c -o $*.o $<
+
+tools/system:	boot/head.o init/main.o tools/version.o linuxsubdirs
+	$(LD) $(LDFLAGS) -M boot/head.o init/main.o tools/version.o \
 		$(ARCHIVES) \
 		$(FILESYSTEMS) \
 		$(DRIVERS) \
@@ -146,33 +165,39 @@ boot/bootsect:	boot/bootsect.s
 fs: dummy
 	$(MAKE) linuxsubdirs SUBDIRS=fs
 
+mm: dummy
+	$(MAKE) linuxsubdirs SUBDIRS=mm
+
+kernel: dummy
+	$(MAKE) linuxsubdirs SUBDIRS=kernel
+
 clean:
 	rm -f Image System.map tmp_make core boot/bootsect boot/setup \
 		boot/bootsect.s boot/setup.s init/main.s
-	rm -f init/*.o tools/system tools/build boot/*.o
-	for i in $(SUBDIRS); do (cd $$i; $(MAKE) clean); done
+	rm -f init/*.o tools/system tools/build boot/*.o tools/*.o
+	for i in $(SUBDIRS); do (cd $$i && $(MAKE) clean); done
 
 backup: clean
-	cd .. ; tar cf - linux | compress - > backup.Z
+	cd .. && tar cf - linux | compress - > backup.Z
 	sync
 
 depend dep:
 	sed '/\#\#\# Dependencies/q' < Makefile > tmp_make
 	for i in init/*.c;do echo -n "init/";$(CPP) -M $$i;done >> tmp_make
 	cp tmp_make Makefile
-	for i in $(SUBDIRS); do (cd $$i; $(MAKE) dep) || exit; done
+	for i in $(SUBDIRS); do (cd $$i && $(MAKE) dep) || exit; done
 
 dummy:
 
 ### Dependencies:
-init/main.o : init/main.c /usr/src/linux/include/stdarg.h /usr/src/linux/include/time.h \
-  /usr/src/linux/include/asm/system.h /usr/src/linux/include/asm/io.h /usr/src/linux/include/linux/types.h \
-  /usr/src/linux/include/linux/fcntl.h /usr/src/linux/include/linux/config.h /usr/src/linux/include/linux/config_rel.h \
-  /usr/src/linux/include/linux/config_ver.h /usr/src/linux/include/linux/config.dist.h \
-  /usr/src/linux/include/linux/sched.h /usr/src/linux/include/linux/head.h /usr/src/linux/include/linux/fs.h \
-  /usr/src/linux/include/linux/limits.h /usr/src/linux/include/linux/wait.h /usr/src/linux/include/linux/dirent.h \
-  /usr/src/linux/include/linux/vfs.h /usr/src/linux/include/linux/minix_fs_sb.h \
-  /usr/src/linux/include/linux/ext_fs_sb.h /usr/src/linux/include/linux/msdos_fs_sb.h \
-  /usr/src/linux/include/linux/mm.h /usr/src/linux/include/linux/kernel.h /usr/src/linux/include/linux/signal.h \
-  /usr/src/linux/include/linux/time.h /usr/src/linux/include/linux/param.h /usr/src/linux/include/linux/resource.h \
-  /usr/src/linux/include/linux/tty.h /usr/src/linux/include/linux/termios.h /usr/src/linux/include/linux/unistd.h 
+init/main.o : init/main.c /usr/lib/gcc-lib/i386-linux/2.2.2d/include/stdarg.h /usr/include/asm/system.h \
+  /usr/include/asm/io.h /usr/include/linux/mktime.h /usr/include/linux/types.h \
+  /usr/include/linux/fcntl.h /usr/include/linux/config.h /usr/include/linux/config.dist.h \
+  /usr/include/linux/sched.h /usr/include/linux/head.h /usr/include/linux/fs.h \
+  /usr/include/linux/limits.h /usr/include/linux/wait.h /usr/include/linux/dirent.h \
+  /usr/include/linux/vfs.h /usr/include/linux/pipe_fs_i.h /usr/include/linux/minix_fs_i.h \
+  /usr/include/linux/ext_fs_i.h /usr/include/linux/msdos_fs_i.h /usr/include/linux/minix_fs_sb.h \
+  /usr/include/linux/ext_fs_sb.h /usr/include/linux/msdos_fs_sb.h /usr/include/linux/mm.h \
+  /usr/include/linux/kernel.h /usr/include/linux/signal.h /usr/include/linux/time.h \
+  /usr/include/linux/param.h /usr/include/linux/resource.h /usr/include/linux/vm86.h \
+  /usr/include/linux/tty.h /usr/include/linux/termios.h /usr/include/linux/unistd.h 

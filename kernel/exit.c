@@ -11,12 +11,14 @@
 #include <linux/signal.h>
 #include <linux/sched.h>
 #include <linux/kernel.h>
+#include <linux/resource.h>
 #include <linux/mm.h>
 #include <linux/tty.h>
 
 #include <asm/segment.h>
 
 int sys_close(int fd);
+void getrusage(struct task_struct *, int, struct rusage *);
 
 int send_sig(long sig,struct task_struct * p,int priv)
 {
@@ -203,6 +205,30 @@ int kill_pg(int pgrp, int sig, int priv)
 	return(found ? 0 : retval);
 }
 
+/* This routine is used by vhangup.  It send's sigkill to everything
+   waiting on a particular wait_queue.  It assumes root privledges.
+   We don't want to destroy the wait queue here, because the caller
+   should call wake_up immediately after calling kill_wait. */
+
+void
+kill_wait (struct wait_queue **q, int sig)
+{
+   struct wait_queue *next;
+   struct wait_queue *tmp;
+   struct task_struct *p;
+   
+   if (!q || !(next = *q))
+     return;
+   do { 
+      tmp = next;
+      next = tmp->next;
+      if (p = tmp->task)
+	{
+	   send_sig (sig, p , 1);
+	}
+   } while (next && next != *q);
+}
+
 int kill_proc(int pid, int sig, int priv)
 {
  	struct task_struct **p;
@@ -297,8 +323,7 @@ volatile void do_exit(long code)
 	int i;
 
 fake_volatile:
-	free_page_tables(get_base(current->ldt[1]),get_limit(0x0f));
-	free_page_tables(get_base(current->ldt[2]),get_limit(0x17));
+	free_page_tables(current);
 	for (i=0 ; i<NR_OPEN ; i++)
 		if (current->filp[i])
 			sys_close(i);
@@ -412,7 +437,7 @@ int sys_exit(int error_code)
 	do_exit((error_code&0xff)<<8);
 }
 
-int sys_waitpid(pid_t pid,unsigned long * stat_addr, int options)
+int sys_wait4(pid_t pid,unsigned long * stat_addr, int options, struct rusage * ru)
 {
 	int flag;
 	struct task_struct *p;
@@ -444,12 +469,16 @@ repeat:
 					put_fs_long((p->exit_code << 8) | 0x7f,
 						stat_addr);
 				p->exit_code = 0;
+				if (ru != NULL)
+					getrusage(p, RUSAGE_BOTH, ru);
 				return p->pid;
 			case TASK_ZOMBIE:
 				current->cutime += p->utime + p->cutime;
 				current->cstime += p->stime + p->cstime;
 				current->cmin_flt += p->min_flt + p->cmin_flt;
 				current->cmaj_flt += p->maj_flt + p->cmaj_flt;
+				if (ru != NULL)
+					getrusage(p, RUSAGE_BOTH, ru);
 				flag = p->pid;
 				if (stat_addr)
 					put_fs_long(p->exit_code, stat_addr);
@@ -483,4 +512,13 @@ repeat:
 			goto repeat;
 	}
 	return -ECHILD;
+}
+
+/*
+ * sys_waitpid() remains for compatibility. waitpid() should be
+ * implemented by calling sys_wait4() from libc.a.
+ */
+int sys_waitpid(pid_t pid,unsigned long * stat_addr, int options)
+{
+	return sys_wait4(pid, stat_addr, options, NULL);
 }

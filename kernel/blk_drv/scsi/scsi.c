@@ -30,14 +30,19 @@
 #include "st.h"
 #endif
 
+#ifdef CONFIG_BLK_DEV_SR
+#include "sr.h"
+#endif
+
 /*
 static const char RCSid[] = "$Header: /usr/src/linux/kernel/blk_drv/scsi/RCS/scsi.c,v 1.1 1992/07/24 06:27:38 root Exp root $";
 */
 
-#define INTERNAL_ERROR (printk ("Internal error in file %s, line %s.\n", __FILE__, __LINE__), panic(""))
+#define INTERNAL_ERROR (printk ("Internal error in file %s, line %d.\n", __FILE__, __LINE__), panic(""))
 
 static void scsi_done (int host, int result);
 static void update_timeout (void);
+static void print_inquiry(unsigned char *data);
 
 static int time_start;
 static int time_elapsed;
@@ -214,6 +219,13 @@ static void scan_scsis (void)
                                                         	scsi_tapes[NR_ST].device = &scsi_devices[NR_SCSI_DEVICES];
 #endif
 							break;
+							case TYPE_ROM:
+								printk("Detected scsi CD-ROM at host %d, ID  %d, lun %d \n", host_nr, dev, lun);
+#ifdef CONFIG_BLK_DEV_SR
+                                                               	if (!(maxed = (NR_SR >= MAX_SR)))
+										scsi_CDs[NR_SR].device = &scsi_devices[NR_SCSI_DEVICES];
+#endif
+								break;
                                                 default :
 #ifdef DEBUG
 							printk("Detected scsi disk at host %d, ID  %d, lun %d \n", host_nr, dev, lun);
@@ -224,11 +236,20 @@ static void scan_scsis (void)
 #endif
 						}
 
+					        print_inquiry(scsi_result);
+
                                                 if (maxed)
                                                 	{
-                                                	printk ("scsi : already have detected maximum number of SCSI %ss Unable to \n"
-                                                                "add drive at SCSI host %s, ID %d, LUN %d\n\r", (type == TYPE_TAPE) ?
-                                                                "tape" : "disk", scsi_hosts[host_nr].name,
+                                                                printk ("Already have detected "
+									"maximum number of SCSI "
+									"%ss Unable to \n"
+                                                                        "add drive at SCSI host "
+									"%s, ID %d, LUN %d\n\r", 
+									(type == TYPE_TAPE) ?
+                                                                             "tape" : 
+									(type == TYPE_DISK) ?
+									     "disk" : "CD-ROM", 
+									scsi_hosts[host_nr].name,
                                                                 dev, lun);
                                                         type = -1;
                                                         break;
@@ -246,7 +267,7 @@ for (; *p != ' '; ++p);
 *p = 0;
 
 printk("s%c%d at scsi%d, id %d, lun %d : %s\n",
-	(type == TYPE_TAPE) ? 't' : 'd',
+	(type == TYPE_TAPE) ? 't' : ((type == TYPE_ROM) ? 'r' : 'd'),
 	(type == TYPE_TAPE) ? 
 #ifdef CONFIG_BLK_DEV_ST
 	NR_ST  
@@ -254,11 +275,20 @@ printk("s%c%d at scsi%d, id %d, lun %d : %s\n",
 	-1
 #endif
 	: 
+       (type == TYPE_ROM ? 
+#ifdef CONFIG_BLK_DEV_SR
+	NR_SR
+#else
+	-1	
+#endif
+	:
 #ifdef CONFIG_BLK_DEV_SD
 	NR_SD
 #else
 	-1	
 #endif
+	)
+
 	,host_nr , dev, lun, p); 
                                                         if (type == TYPE_TAPE)
 #ifdef CONFIG_BLK_DEV_ST
@@ -267,9 +297,15 @@ printk("s%c%d at scsi%d, id %d, lun %d : %s\n",
 ;
 #endif
 
-							else
+                                                  else if (type == TYPE_DISK)
 #ifdef CONFIG_BLK_DEV_SD
                                                         	++NR_SD;
+#else
+;
+#endif
+								else
+#ifdef CONFIG_BLK_DEV_SR
+								        ++NR_SR;
 #else
 ;
 #endif
@@ -289,17 +325,22 @@ printk("s%c%d at scsi%d, id %d, lun %d : %s\n",
 	"%d tape%s "
 #endif
 
-	"total.\n",  
+#ifdef CONFIG_BLK_DEV_SR
+"%d CD-ROM drive%s "
+#endif
+
+	"total.\n"  
 
 #ifdef CONFIG_BLK_DEV_SD
-	NR_SD, (NR_SD != 1) ? "s" : ""
-#ifdef CONFIG_BLK_DEV_ST 
-	,
-#endif
+	, NR_SD, (NR_SD != 1) ? "s" : ""
 #endif
 
 #ifdef CONFIG_BLK_DEV_ST
-	NR_ST, (NR_ST != 1) ? "s" : ""
+	, NR_ST, (NR_ST != 1) ? "s" : ""
+#endif
+
+#ifdef CONFIG_BLK_DEV_SR
+        , NR_SR, (NR_SR != 1) ? "s" : ""
 #endif
 	);
 	in_scan = 0;
@@ -388,7 +429,6 @@ update_timeout();
 		"bufflen = %d, done = %08x)\n", host, target, cmnd, buffer, bufflen, done);
 #endif
 
-	
         if (scsi_hosts[host].can_queue)
 		{
 #ifdef DEBUG
@@ -557,8 +597,8 @@ static void reset (int host)
 
 static int check_sense (int host)
 	{
-	if (((sense_buffer[0] & 0x70) >> 4) == 7)
-		switch (sense_buffer[2] & 0xf)
+	if (((last_cmnd[host].sense_buffer[0] & 0x70) >> 4) == 7)
+		switch (last_cmnd[host].sense_buffer[2] & 0xf)
 		{
 		case NO_SENSE:
 		case RECOVERED_ERROR:
@@ -587,6 +627,27 @@ static int check_sense (int host)
 		return SUGGEST_RETRY;	
 	}	
 
+/* This function is the mid-level interrupt routine, which decides how
+ *  to handle error conditions.  Each invocation of this function must
+ *  do one and *only* one of the following:
+ *
+ *  (1) Call last_cmnd[host].done.  This is done for fatal errors and
+ *      normal completion, and indicates that the handling for this
+ *      request is complete.
+ *  (2) Call internal_cmnd to requeue the command.  This will result in
+ *      scsi_done being called again when the retry is complete.
+ *  (3) Call scsi_request_sense.  This asks the host adapter/drive for
+ *      more information about the error condition.  When the information
+ *      is available, scsi_done will be called again.
+ *  (4) Call reset().  This is sort of a last resort, and the idea is that
+ *      this may kick things loose and get the drive working again.  reset()
+ *      automatically calls scsi_request_sense, and thus scsi_done will be
+ *      called again once the reset is complete.
+ *
+ *      If none of the above actions are taken, the drive in question
+ * will hang. If more than one of the above actions are taken by
+ * scsi_done, then unpredictable behavior will result.
+ */
 static void scsi_done (int host, int result)
 	{
 	int status=0;
@@ -600,6 +661,7 @@ static void scsi_done (int host, int result)
 #define FINISHED 0
 #define MAYREDO  1
 #define REDO	 3
+#define PENDING  4
 
 #ifdef DEBUG
 	printk("In scsi_done(host = %d, result = %06x)\n", host, result);
@@ -629,8 +691,11 @@ static void scsi_done (int host, int result)
 			internal_timeout[host] &= ~SENSE_TIMEOUT;
 			sti();
 
-			if (!(last_cmnd[host].flags & WAS_RESET)) 
+			if (!(last_cmnd[host].flags & WAS_RESET))
+				{
 				reset(host);
+				return;
+				}
 			else
 				{
 				exit = (DRIVER_HARD | SUGGEST_ABORT);
@@ -705,6 +770,7 @@ static void scsi_done (int host, int result)
 #endif
 
 				scsi_request_sense (host, last_cmnd[host].target, last_cmnd[host].lun);
+				status = PENDING;
 				break;       	
 			
 			case CONDITION_GOOD:
@@ -726,9 +792,12 @@ static void scsi_done (int host, int result)
 
 			case RESERVATION_CONFLICT:
 				reset(host);
+				return;
+#if 0
 				exit = DRIVER_SOFT | SUGGEST_ABORT;
 				status = MAYREDO;
 				break;
+#endif
 			default:
 				printk ("Internal error %s %s \n"
 					"status byte = %d \n", __FILE__, 
@@ -786,6 +855,7 @@ static void scsi_done (int host, int result)
 	switch (status) 
 		{
 		case FINISHED:
+		case PENDING:
 			break;
 		case MAYREDO:
 
@@ -796,11 +866,13 @@ static void scsi_done (int host, int result)
 
 			if ((++last_cmnd[host].retries) < last_cmnd[host].allowed)
 			{
-			if ((last_cmnd[host].retries >= (last_cmnd[host].allowed >> 1)) 
+			if ((last_cmnd[host].retries >= (last_cmnd[host].allowed >> 1))
 			    && !(last_cmnd[host].flags & WAS_RESET))
-				reset(host);
-				break;
-			
+			        {
+					reset(host);
+					break;
+			        }
+
 			}
 			else
 				{
@@ -836,7 +908,7 @@ static void scsi_done (int host, int result)
 #undef FINISHED
 #undef REDO
 #undef MAYREDO
-		
+#undef PENDING
 	}
 
 /*
@@ -1056,5 +1128,59 @@ void scsi_dev_init (void)
 #ifdef CONFIG_BLK_DEV_ST
         st_init();              /* init scsi tapes */
 #endif
+
+#ifdef CONFIG_BLK_DEV_SR
+	sr_init();
+#endif
 	}
 #endif
+
+static void print_inquiry(unsigned char *data)
+{
+        int i;
+
+	printk("  Vendor:");
+	for (i = 8; i < 15; i++)
+	        {
+	        if (data[i] >= 20)
+		        printk("%c", data[i]);
+	        else
+		        printk(" ");
+	        }
+
+	printk("  Model:");
+	for (i = 16; i < 31; i++)
+	        {
+	        if (data[i] >= 20)
+		        printk("%c", data[i]);
+	        else
+		        printk(" ");
+	        }
+
+	printk("  Rev:");
+	for (i = 32; i < 35; i++)
+	        {
+	        if (data[i] >= 20)
+		        printk("%c", data[i]);
+	        else
+		        printk(" ");
+	        }
+
+	printk("\n");
+
+	i = data[0] & 0x1f;
+
+	printk("  Type: %s ", 	i == 0x00 ? "Direct-Access    " :
+				i == 0x01 ? "Sequential-Access" :
+				i == 0x02 ? "Printer          " :
+				i == 0x03 ? "Processor        " :
+				i == 0x04 ? "WORM             " :
+				i == 0x05 ? "CD-ROM           " :
+				i == 0x06 ? "Scanner          " :
+				i == 0x07 ? "Optical Device   " :
+				i == 0x08 ? "Medium Changer   " :
+				i == 0x09 ? "Communications   " :
+				            "Unknown          " );
+	printk("ANSI SCSI revision: %02x\n", data[2] & 0x07);
+}
+

@@ -1,5 +1,5 @@
-#ifndef _CONFIG_DIST_H
-#define _CONFIG_DIST_H
+#ifndef _LINUX_CONFIG_DIST_H
+#define _LINUX_CONFIG_DIST_H
 #ifdef CONFIG_DISTRIBUTION
 
 #undef CONFG_SCSI
@@ -24,6 +24,8 @@
 #define CONFIG_BLK_DEV_HD
 #undef CONFIG_BLK_DEV_SD
 #define CONFIG_BLK_DEV_SD
+#undef CONFIG_BLK_DEV_SR
+#define CONFIG_BLK_DEV_SR
 #undef CONFIG_BLK_DEV_ST
 #define CONFIG_BLK_DEV_ST
 

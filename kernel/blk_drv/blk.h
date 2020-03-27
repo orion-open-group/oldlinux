@@ -1,7 +1,7 @@
 #ifndef _BLK_H
 #define _BLK_H
 
-#define NR_BLK_DEV	10
+#define NR_BLK_DEV	12
 /*
  * NR_REQUEST is the number of entries in the request-queue.
  * NOTE that writes may use only the low 2/3 of these: reads
@@ -69,6 +69,7 @@ extern struct wait_queue * wait_for_request;
 
 extern int * blk_size[NR_BLK_DEV];
 
+extern unsigned long hd_init(unsigned long mem_start, unsigned long mem_end);
 extern int is_read_only(int dev);
 extern void set_device_ro(int dev,int flag);
 
@@ -132,7 +133,16 @@ extern void set_device_ro(int dev,int flag);
 #define DEVICE_ON(device)
 #define DEVICE_OFF(device)
 
-#elif
+#elif (MAJOR_NR == 11)
+/* scsi CD-ROM */
+#define DEVICE_NAME "CD-ROM"
+#define DEVICE_INTR do_sr
+#define DEVICE_REQUEST do_sr_request
+#define DEVICE_NR(device) (MINOR(device))
+#define DEVICE_ON(device)
+#define DEVICE_OFF(device)
+
+#else
 /* unknown blk device */
 #error "unknown blk device"
 

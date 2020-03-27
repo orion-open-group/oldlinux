@@ -38,8 +38,8 @@ struct hd_struct sd[MAX_SD << 4];
 				
 int NR_SD=0;
 Scsi_Disk rscsi_disks[MAX_SD];
-static int sd_sizes[MAX_SD << 4];
-static int this_count;
+static int sd_sizes[MAX_SD << 4] = {0, };
+static int this_count, total_count = 0;
 static int the_result;
 
 static char sense_buffer[255];
@@ -56,9 +56,7 @@ static struct gendisk sd_gendisk;
 static void sd_geninit (void) {
 	int i;
 	for (i = 0; i < NR_SD; ++i)
-		sd_sizes[i << 4] = 
-		(sd[i << 4].nr_sects = rscsi_disks[i].capacity) >>
-		(BLOCK_SIZE_BITS - 9);
+	  sd[i << 4].nr_sects = rscsi_disks[i].capacity;
 	sd_gendisk.nr_real = NR_SD;
 }
 
@@ -110,6 +108,13 @@ static void rw_intr (int host, int result)
 
 	if (!result) {
 		CURRENT->nr_sectors -= this_count;
+		total_count -= this_count;
+		if(total_count){
+		  CURRENT->sector += this_count;
+		  CURRENT->buffer += (this_count << 9);
+		  do_sd_request();
+		  return;
+		};
 
 #ifdef DEBUG
 		printk("sd%d : %d sectors remain.\n", MINOR(CURRENT->dev), CURRENT->nr_sectors);
@@ -250,6 +255,10 @@ repeat:
 		this_count = CURRENT->nr_sectors;
 	else
 		this_count = (BLOCK_SIZE / 512);
+/* This is a temporary hack for the AHA1742. */
+	if(total_count == 0)
+	  total_count = this_count;
+	this_count = 1;  /* Take only 512 bytes at a time */
 
 #ifdef DEBUG
 	printk("sd%d : %s %d/%d 512 byte blocks.\n", MINOR(CURRENT->dev), 
@@ -414,9 +423,8 @@ void sd_init(void)
 		}
 
 	blk_dev[MAJOR_NR].request_fn = DEVICE_REQUEST;
-	blk_size[MAJOR_NR] = sd_sizes;	
-	blkdev_fops[MAJOR_NR] = &sd_fops; 
+	blkdev_fops[MAJOR_NR] = &sd_fops;
 	sd_gendisk.next = gendisk_head;
 	gendisk_head = &sd_gendisk;
-}	
+}
 #endif

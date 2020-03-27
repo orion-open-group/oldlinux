@@ -75,9 +75,6 @@ static int seek = 0;
 
 extern unsigned char current_DOR;
 
-#define immoutb_p(val,port) \
-__asm__("outb %0,%1\n\tjmp 1f\n1:\tjmp 1f\n1:"::"a" ((char) (val)),"i" (port))
-
 #define TYPE(x) ((x)>>2)
 #define DRIVE(x) ((x)&0x03)
 
@@ -191,7 +188,7 @@ static int keep_data[4] = { 0,0,0,0 };
  * Announce successful media type detection and media information loss after
  * disk changes.
  */
-static ftd_msg[4] = { 1,1,1,1 };
+static ftd_msg[4] = { 0,0,0,0 };
 
 /* Prevent "aliased" accesses. */
 
@@ -343,12 +340,15 @@ __asm__("cld ; rep ; movsl" \
 static void setup_DMA(void)
 {
 	unsigned long addr,count;
+	unsigned char dma_code;
 
+	dma_code = DMA_WRITE;
+	if (command == FD_READ)
+		dma_code = DMA_READ;
 	if (command == FD_FORMAT) {
 		addr = (long) tmp_floppy_area;
 		count = floppy->sect*4;
-	}
-	else {
+	} else {
 		addr = (long) CURRENT->buffer;
 		count = 1024;
 	}
@@ -362,31 +362,30 @@ static void setup_DMA(void)
 		if (command == FD_WRITE)
 			copy_buffer(CURRENT->buffer,tmp_floppy_area);
 	}
-/* mask DMA 2 */
 	cli();
 #ifndef HHB_SYSMACROS
-	immoutb_p(4|2,10);
+/* mask DMA 2 */
+	outb_p(4|2,10);
 /* output command byte. I don't know why, but everyone (minix, */
 /* sanches & canton) output this twice, first to 12 then to 11 */
- 	__asm__("outb %%al,$12\n\tjmp 1f\n1:\tjmp 1f\n1:\t"
-	"outb %%al,$11\n\tjmp 1f\n1:\tjmp 1f\n1:"::
-	"a" ((char) ((command == FD_READ)?DMA_READ:DMA_WRITE)));
+	outb_p(dma_code,12);
+	outb_p(dma_code,11);
 /* 8 low bits of addr */
-	immoutb_p(addr,4);
+	outb_p(addr,4);
 	addr >>= 8;
 /* bits 8-15 of addr */
-	immoutb_p(addr,4);
+	outb_p(addr,4);
 	addr >>= 8;
 /* bits 16-19 of addr */
-	immoutb_p(addr,0x81);
+	outb_p(addr,0x81);
 /* low 8 bits of count-1 */
 	count--;
-	immoutb_p(count,5);
+	outb_p(count,5);
 	count >>= 8;
 /* high 8 bits of count-1 */
-	immoutb_p(count,5);
+	outb_p(count,5);
 /* activate DMA 2 */
-	immoutb_p(0|2,10);
+	outb_p(0|2,10);
 #else			/* just to show off my macros -- hhb */
 	DISABLE_DMA(DMA2);
 	CLEAR_DMA_FF(DMA2);
@@ -1008,12 +1007,15 @@ static int fd_ioctl(struct inode *inode, struct file *filp, unsigned int cmd,
 	switch (cmd) {
 		RO_IOCTLS(inode->i_rdev,param);
 	}
-	if (!suser()) return -EPERM;
 	drive = MINOR(inode->i_rdev);
 	switch (cmd) {
 		case FDFMTBEG:
+			if (!suser())
+				return -EPERM;
 			return 0;
 		case FDFMTEND:
+			if (!suser())
+				return -EPERM;
 			cli();
 			fake_change |= 1 << (drive & 3);
 			sti();
@@ -1030,6 +1032,8 @@ static int fd_ioctl(struct inode *inode, struct file *filp, unsigned int cmd,
 				    (char *) param+cnt);
 			return 0;
 		case FDFMTTRK:
+			if (!suser())
+				return -EPERM;
 			cli();
 			while (format_status != FORMAT_NONE)
 				sleep_on(&format_done);
@@ -1056,7 +1060,10 @@ static int fd_ioctl(struct inode *inode, struct file *filp, unsigned int cmd,
 			wake_up(&format_done);
 			return okay ? 0 : -EIO;
  	}
-	if (drive < 0 || drive > 3) return -EINVAL;
+	if (!suser())
+		return -EPERM;
+	if (drive < 0 || drive > 3)
+		return -EINVAL;
 	switch (cmd) {
 		case FDCLRPRM:
 			current_type[drive] = NULL;
