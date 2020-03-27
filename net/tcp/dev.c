@@ -19,6 +19,24 @@
     The Author may be reached as bir7@leland.stanford.edu or
     C/O Department of Mathematics; Stanford University; Stanford, CA 94305
 */
+/* $Id: dev.c,v 0.8.4.4 1992/11/18 15:38:03 bir7 Exp $ */
+/* $Log: dev.c,v $
+ * Revision 0.8.4.4  1992/11/18  15:38:03  bir7
+ * Fixed bug in copying packets and changed some printk's
+ *
+ * Revision 0.8.4.3  1992/11/15  14:55:30  bir7
+ * More sanity checks.
+ *
+ * Revision 0.8.4.2  1992/11/10  10:38:48  bir7
+ * Change free_s to kfree_s and accidently changed free_skb to kfree_skb.
+ *
+ * Revision 0.8.4.1  1992/11/10  00:17:18  bir7
+ * version change only.
+ *
+ * Revision 0.8.3.5  1992/11/10  00:14:47  bir7
+ * Changed malloc to kmalloc and added $iId$ 
+ *
+ */
 
 #include <asm/segment.h>
 #include <asm/system.h>
@@ -29,7 +47,6 @@
 #include <linux/mm.h>
 #include <linux/socket.h>
 #include <netinet/in.h>
-#include <asm/memory.h>
 #include "dev.h"
 #include "eth.h"
 #include "timer.h"
@@ -120,8 +137,22 @@ void
 dev_queue_xmit (struct sk_buff *skb, struct device *dev, int pri)
 {
   struct sk_buff *skb2;
-  PRINTK ("eth_queue_xmit (skb=%X, dev=%X, pri = %d)\n", skb, dev, pri);
+  PRINTK ("dev_queue_xmit (skb=%X, dev=%X, pri = %d)\n", skb, dev, pri);
+
+  if (dev == NULL)
+    {
+      printk ("dev.c: dev_queue_xmit: dev = NULL\n");
+      return;
+    }
+  
   skb->dev = dev;
+  if (skb->next != NULL)
+    {
+      /* make sure we haven't missed an interrupt. */
+       dev->hard_start_xmit (NULL, dev);
+       return;
+    }
+
   if (pri < 0 || pri >= DEV_NUMBUFFS)
     {
        printk ("bad priority in dev_queue_xmit.\n");
@@ -133,18 +164,8 @@ dev_queue_xmit (struct sk_buff *skb, struct device *dev, int pri)
        return;
     }
 
-  if (skb->next != NULL)
-    {
-       printk ("retransmitted packet still on queue. \n");
-       return;
-    }
-
-  /* used to say it is not currently on a send list. */
-  skb->next = NULL;
-
-
   /* put skb into a bidirectional circular linked list. */
-  PRINTK ("eth_queue dev->buffs[%d]=%X\n",pri, dev->buffs[pri]);
+  PRINTK ("dev_queue_xmit dev->buffs[%d]=%X\n",pri, dev->buffs[pri]);
   /* interrupts should already be cleared by hard_start_xmit. */
   cli();
   if (dev->buffs[pri] == NULL)
@@ -187,9 +208,12 @@ dev_rint(unsigned char *buff, unsigned long len, int flags,
    /* try to grab some memory. */
    if (len > 0 && buff != NULL)
      {
-	skb = malloc (sizeof (*skb) + len);
-	skb->mem_len = sizeof (*skb) + len;
-	skb->mem_addr = skb;
+	skb = kmalloc (sizeof (*skb) + len, GFP_ATOMIC);
+	if (skb != NULL)
+	  {
+	    skb->mem_len = sizeof (*skb) + len;
+	    skb->mem_addr = skb;
+	  }
      }
 
    /* firs we copy the packet into a buffer, and save it for later. */
@@ -212,7 +236,7 @@ dev_rint(unsigned char *buff, unsigned long len, int flags,
 	  }
 	else
 	  {
-	     free_s (skb->mem_addr, skb->mem_len);
+	     kfree_s (skb->mem_addr, skb->mem_len);
 	     skb = (struct sk_buff *)buff;
 	  }
 
@@ -240,7 +264,7 @@ dev_rint(unsigned char *buff, unsigned long len, int flags,
      }
 
    if (skb != NULL) 
-     free_s (skb->mem_addr, skb->mem_len);
+     kfree_s (skb->mem_addr, skb->mem_len);
 
    /* anything left to process? */
 
@@ -293,10 +317,14 @@ dev_rint(unsigned char *buff, unsigned long len, int flags,
 	     /* copy the packet if we need to. */
 	     if (ptype->copy)
 	       {
-		  skb2 = malloc (skb->mem_len);
+		  skb2 = kmalloc (skb->mem_len, GFP_ATOMIC);
 		  if (skb2 == NULL) continue;
 		  memcpy (skb2, skb, skb->mem_len);
 		  skb2->mem_addr = skb2;
+		  skb2->h.raw = (void *)((unsigned long)skb2
+					 + (unsigned long)skb->h.raw
+					 - (unsigned long)skb);
+
 	       }
 	     else
 	       {
@@ -311,7 +339,7 @@ dev_rint(unsigned char *buff, unsigned long len, int flags,
    if (!flag)
      {
 	PRINTK ("discarding packet type = %X\n", type);
-	free_skb (skb, FREE_READ);
+	kfree_skb (skb, FREE_READ);
      }
 
      if (buff == NULL)
@@ -350,15 +378,15 @@ dev_tint(unsigned char *buff,  struct device *dev)
 	    }
 	  skb->next = NULL;
 	  skb->prev = NULL;
-	  sti();
 	  tmp = skb->len;
 	  if (!skb->arp)
 	    {
 	       if (dev->rebuild_header (skb+1, dev))
 		 {
-		    skb->dev = dev;
-		    arp_queue (skb);
-		    continue;
+		   skb->dev = dev;
+		   sti();
+		   arp_queue (skb);
+		   continue;
 		 }
 	    }
 	     
@@ -378,10 +406,10 @@ dev_tint(unsigned char *buff,  struct device *dev)
 	    {
 	       printk ("**** bug len bigger than mtu. \n");
 	    }
-
+	  sti();
 	  if (skb->free)
 	    {
-		  free_skb(skb, FREE_WRITE);
+		  kfree_skb(skb, FREE_WRITE);
 	    }
 
 	  if (tmp != 0)

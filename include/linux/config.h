@@ -24,6 +24,11 @@
 #define DEF_SETUPSEG	0x9020
 #define DEF_SYSSIZE	0x7000
 
+/* internal svga startup constants */
+#define NORMAL_VGA	0xffff		/* 80x25 mode */
+#define EXTENDED_VGA	0xfffe		/* 80x50 mode */
+#define ASK_VGA		0xfffd		/* ask for it at bootup */
+
 /*
  * The root-device is no longer hard-coded. You can change the default
  * root-device by changing the line ROOT_DEV = XXX in boot/bootsect.s
@@ -73,6 +78,7 @@
 */
 
 #undef CONFIG_SCSI_AHA1542
+#undef CONFIG_SCSI_AHA1740
 #undef CONFIG_SCSI_ALWAYS
 #undef CONFIG_SCSI_CSC
 #undef CONFIG_SCSI_DTC
@@ -87,12 +93,23 @@ defined(CONFIG_CHR_DEV_ST)
 	#define CONFIG_SCSI
 #endif
 
-#if !defined(CONFIG_SCSI_AHA1542) && !defined(CONFIG_SCSI_CSC) && !defined(CONFIG_SCSI_DTC) && \
+#if !defined(CONFIG_SCSI_AHA1542) && !defined(CONFIG_SCSI_AHA1740) && !defined(CONFIG_SCSI_CSC) && !defined(CONFIG_SCSI_DTC) && \
 		!defined(CONFIG_SCSI_FUTURE_DOMAIN) &&  !defined(CONFIG_SCSI_SEAGATE) && !defined(CONFIG_SCSI_ULTRASTOR) && \
 		!defined(CONFIG_SCSI_7000FASST)
 #error  Error : SCSI devices enabled, but no low level drivers have been enabled.
 #endif
 #endif
+
+/*
+ *  Choose filesystems here.
+ */
+
+#define MINIX_FS
+#define EXT_FS
+#define MSDOS_FS
+#define PROC_FS
+#undef  NFS_FS
+#undef ISO9660_FS
 
 #ifdef CONFIG_DISTRIBUTION
 #include <linux/config.dist.h>

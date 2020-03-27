@@ -19,6 +19,24 @@
     The Author may be reached as bir7@leland.stanford.edu or
     C/O Department of Mathematics; Stanford University; Stanford, CA 94305
 */
+/* $Id: ip.c,v 0.8.4.4 1992/11/18 15:38:03 bir7 Exp $ */
+/* $Log: ip.c,v $
+ * Revision 0.8.4.4  1992/11/18  15:38:03  bir7
+ * Fixed bug in copying packet and checking packet type.
+ *
+ * Revision 0.8.4.3  1992/11/17  14:19:47  bir7
+ * *** empty log message ***
+ *
+ * Revision 0.8.4.2  1992/11/10  10:38:48  bir7
+ * Change free_s to kfree_s and accidently changed free_skb to kfree_skb.
+ *
+ * Revision 0.8.4.1  1992/11/10  00:17:18  bir7
+ * version change only.
+ *
+ * Revision 0.8.3.3  1992/11/10  00:14:47  bir7
+ * Changed malloc to kmalloc and added $iId$ and 
+ *
+*/
 
 #include <asm/segment.h>
 #include <asm/system.h>
@@ -185,8 +203,8 @@ print_rt(struct rtable *rt)
 void
 print_ipprot (struct ip_protocol *ipprot)
 {
-   PRINTK ("handler = %X, protocol = %d\n",
-	   ipprot->handler, ipprot->protocol);
+   PRINTK ("handler = %X, protocol = %d, copy=%d \n",
+	   ipprot->handler, ipprot->protocol, ipprot->copy);
 }
 
 /* This assumes that address are all in net order. */
@@ -252,7 +270,7 @@ add_route (struct rtable *rt)
 		 rt->next = r->next;
 		 r1->next = rt;
 	      }
-	    free_s (r, sizeof (*r));
+	    kfree_s (r, sizeof (*r));
 	    return;
 	 }
 
@@ -289,7 +307,7 @@ ip_set_dev (struct ip_config *u_ipc)
 
   if (ip_ads >= MAX_IP_ADDRES) return (-EINVAL);
 
-  verify_area (u_ipc, sizeof (ipc));
+/*  verify_area (u_ipc, sizeof (ipc));*/
   memcpy_fromfs(&ipc, u_ipc, sizeof (ipc));
   ipc.name[MAX_IP_NAME-1] = 0;
   dev = get_dev (ipc.name);
@@ -300,7 +318,7 @@ ip_set_dev (struct ip_config *u_ipc)
   if (ipc.net != -1)
     {
        arp_add_broad (ipc.net, dev);
-       rt = malloc (sizeof (*rt));
+       rt = kmalloc (sizeof (*rt), GFP_KERNEL);
        if (rt == NULL) return (-ENOMEM);
 
        rt->net = ipc.net;
@@ -312,7 +330,7 @@ ip_set_dev (struct ip_config *u_ipc)
 
   if (ipc.router != -1)
     {
-       rt = malloc (sizeof (*rt));
+       rt = kmalloc (sizeof (*rt),GFP_KERNEL);
        if (rt == NULL) return (-ENOMEM);
        rt->net = 0;
        rt->dev = dev;
@@ -322,7 +340,7 @@ ip_set_dev (struct ip_config *u_ipc)
 
   if (dev->loopback)
     {
-       rt = malloc (sizeof (*rt));
+       rt = kmalloc (sizeof (*rt), GFP_KERNEL);
        if (rt == NULL) return (-ENOMEM);
        rt->net = ipc.paddr;
        rt->dev = dev;
@@ -356,6 +374,7 @@ ip_route_check (unsigned long daddr)
 {
 }
 
+#if 0
 /* this routine puts the options at the end of an ip header. */
 static  int
 build_options (struct ip_header *iph, struct options *opt)
@@ -366,6 +385,7 @@ build_options (struct ip_header *iph, struct options *opt)
   *ptr = 0;
   return (4);
 }
+#endif
 
 /* This routine builds the appropriate hardware/ip headers for
    the routine.  It assumes that if *prot != NULL then the
@@ -688,7 +708,7 @@ ip_rcv(struct sk_buff *skb, struct device *dev, struct packet_type *pt)
     {
        PRINTK ("ip packet thrown out. \n");
        skb->sk = NULL;
-       free_skb(skb, 0);
+       kfree_skb(skb, 0);
        return (0);
     }
 
@@ -697,7 +717,7 @@ ip_rcv(struct sk_buff *skb, struct device *dev, struct packet_type *pt)
     {
        PRINTK ("packet meant for someone else.\n");
        skb->sk = NULL;
-       free_skb(skb, 0);
+       kfree_skb(skb, 0);
        return (0);
     }
 
@@ -706,7 +726,7 @@ ip_rcv(struct sk_buff *skb, struct device *dev, struct packet_type *pt)
     {
        printk ("packet fragmented. \n");
        skb->sk = NULL;
-       free_skb(skb, 0);
+       kfree_skb(skb, 0);
        return(0);
     }
 
@@ -719,6 +739,7 @@ ip_rcv(struct sk_buff *skb, struct device *dev, struct packet_type *pt)
   for (ipprot = ip_protos[hash]; ipprot != NULL; ipprot=ipprot->next)
     {
        struct sk_buff *skb2;
+       if (ipprot->protocol != iph->protocol) continue;
        PRINTK ("Using protocol = %X:\n", ipprot);
        print_ipprot (ipprot);
        /* pass it off to everyone who wants it. */
@@ -729,10 +750,13 @@ ip_rcv(struct sk_buff *skb, struct device *dev, struct packet_type *pt)
 
        if (ipprot->copy)
 	 {
-	    skb2 = malloc (skb->mem_len);
+	    skb2 = kmalloc (skb->mem_len, GFP_ATOMIC);
 	    if (skb2 == NULL) continue;
 	    memcpy (skb2, skb, skb->mem_len);
 	    skb2->mem_addr = skb2;
+	    skb2->h.raw = (void *)((unsigned long)skb2
+				   + (unsigned long)skb->h.raw
+				   - (unsigned long)skb);
 	 }
        else
 	 {
@@ -748,7 +772,7 @@ ip_rcv(struct sk_buff *skb, struct device *dev, struct packet_type *pt)
     {
        icmp_reply (skb, ICMP_DEST_UNREACH, ICMP_PROT_UNREACH, dev);
        skb->sk = NULL;
-       free_skb (skb, 0);
+       kfree_skb (skb, 0);
     }
 
 
@@ -805,15 +829,19 @@ ip_queue_xmit (volatile struct sock *sk, struct device *dev,
     }
   if (dev->up)
     {
-       if (sk)
-	 dev->queue_xmit(skb, dev, sk->priority);
+       if (sk != NULL)
+	 {
+	   dev->queue_xmit(skb, dev, sk->priority);
+	 }
        else
-	 dev->queue_xmit (skb, dev, SOPRI_NORMAL);
+	 {
+	   dev->queue_xmit (skb, dev, SOPRI_NORMAL);
+	 }
     }
   else
     {
        if (free) 
-	 free_skb (skb, FREE_WRITE);
+	 kfree_skb (skb, FREE_WRITE);
     }
 }
 
@@ -923,7 +951,7 @@ ip_handoff (volatile struct sock *sk)
 	p->handler ((unsigned char *)(skb+1), skb->dev, NULL, skb->saddr,
 		    skb->len, skb->daddr, p->protocol, 0);
      }
-   free_skb (skb, FREE_READ);
+   kfree_skb (skb, FREE_READ);
    release_sock (sk);
    return (0);
 }

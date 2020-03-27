@@ -124,7 +124,6 @@ int do_IRQ(int irq, struct pt_regs * regs)
 	struct sigaction * sa = irq + irq_sigaction;
 
 	sa->sa_handler((int) regs);
-	return 0;		/* re-enable the irq when returning */
 }
 
 /*
@@ -137,7 +136,6 @@ int do_fast_IRQ(int irq)
 	struct sigaction * sa = irq + irq_sigaction;
 
 	sa->sa_handler(irq);
-	return 0;		/* re-enable the irq when returning */
 }
 
 int irqaction(unsigned int irq, struct sigaction * new)
@@ -152,7 +150,8 @@ int irqaction(unsigned int irq, struct sigaction * new)
 		return -EBUSY;
 	if (!new->sa_handler)
 		return -EINVAL;
-	__asm__ __volatile__("pushfl ; popl %0 ; cli":"=r" (flags));
+	save_flags(flags);
+	cli();
 	*sa = *new;
 	sa->sa_mask = 1;
 	if (sa->sa_flags & SA_INTERRUPT)
@@ -165,7 +164,7 @@ int irqaction(unsigned int irq, struct sigaction * new)
 		outb(inb_p(0x21) & ~(1<<2),0x21);
 		outb(inb_p(0xA1) & ~(1<<(irq-8)),0xA1);
 	}
-	__asm__ __volatile__("pushl %0 ; popfl"::"r" (flags));
+	restore_flags(flags);
 	return 0;
 }
 		
@@ -193,7 +192,8 @@ void free_irq(unsigned int irq)
 		printk("Trying to free free IRQ%d\n",irq);
 		return;
 	}
-	__asm__ __volatile__("pushfl ; popl %0 ; cli":"=r" (flags));
+	save_flags(flags);
+	cli();
 	if (irq < 8)
 		outb(inb_p(0x21) | (1<<irq),0x21);
 	else
@@ -203,7 +203,7 @@ void free_irq(unsigned int irq)
 	sa->sa_flags = 0;
 	sa->sa_mask = 0;
 	sa->sa_restorer = NULL;
-	__asm__ __volatile__("pushl %0 ; popfl"::"r" (flags));
+	restore_flags(flags);
 }
 
 extern void do_coprocessor_error(long,long);

@@ -1,6 +1,8 @@
 #ifndef _LINUX_STRING_H_
 #define _LINUX_STRING_H_
 
+#include <linux/types.h>	/* for size_t */
+
 #ifndef NULL
 #define NULL ((void *) 0)
 #endif
@@ -90,7 +92,7 @@ __asm__("cld\n"
 	"xorl %%eax,%%eax\n\t"
 	"jmp 3f\n"
 	"2:\tmovl $1,%%eax\n\t"
-	"jl 3f\n\t"
+	"jb 3f\n\t"
 	"negl %%eax\n"
 	"3:"
 	:"=a" (__res):"D" (cs),"S" (ct):"si","di");
@@ -111,7 +113,7 @@ __asm__("cld\n"
 	"2:\txorl %%eax,%%eax\n\t"
 	"jmp 4f\n"
 	"3:\tmovl $1,%%eax\n\t"
-	"jl 4f\n\t"
+	"jb 4f\n\t"
 	"negl %%eax\n"
 	"4:"
 	:"=a" (__res):"D" (cs),"S" (ct),"c" (count):"si","di","cx");
@@ -326,14 +328,22 @@ __asm__("testl %1,%1\n\t"
 return __res;
 }
 
-extern inline void * memcpy(void * dest,const void * src, size_t n)
+extern inline void * memcpy(void * to, const void * from, size_t n)
 {
 __asm__("cld\n\t"
-	"rep\n\t"
-	"movsb"
-	::"c" (n),"S" (src),"D" (dest)
-	:"cx","si","di");
-return dest;
+	"movl %%edx, %%ecx\n\t"
+	"shrl $2,%%ecx\n\t"
+	"rep ; movsl\n\t"
+	"testb $1,%%dl\n\t"
+	"je 1f\n\t"
+	"movsb\n"
+	"1:\ttestb $2,%%dl\n\t"
+	"je 2f\n\t"
+	"movsw\n"
+	"2:\n"
+	::"d" (n),"D" ((long) to),"S" ((long) from)
+	: "cx","di","si");
+return (to);
 }
 
 extern inline void * memmove(void * dest,const void * src, size_t n)
@@ -362,7 +372,7 @@ __asm__("cld\n\t"
 	"cmpsb\n\t"
 	"je 1f\n\t"
 	"movl $1,%%eax\n\t"
-	"jl 1f\n\t"
+	"jb 1f\n\t"
 	"negl %%eax\n"
 	"1:"
 	:"=a" (__res):"0" (0),"D" (cs),"S" (ct),"c" (count)
