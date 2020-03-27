@@ -1,9 +1,3 @@
-/*
- *  linux/fs/read_write.c
- *
- *  (C) 1991  Linus Torvalds
- */
-
 #include <sys/stat.h>
 #include <errno.h>
 #include <sys/types.h>
@@ -12,7 +6,7 @@
 #include <linux/sched.h>
 #include <asm/segment.h>
 
-extern int rw_char(int rw,int dev, char * buf, int count, off_t * pos);
+extern int rw_char(int rw,int dev, char * buf, int count);
 extern int read_pipe(struct m_inode * inode, char * buf, int count);
 extern int write_pipe(struct m_inode * inode, char * buf, int count);
 extern int block_read(int dev, off_t * pos, char * buf, int count);
@@ -28,7 +22,7 @@ int sys_lseek(unsigned int fd,off_t offset, int origin)
 	int tmp;
 
 	if (fd >= NR_OPEN || !(file=current->filp[fd]) || !(file->f_inode)
-	   || !IS_SEEKABLE(MAJOR(file->f_inode->i_dev)))
+	   || !IS_BLOCKDEV(MAJOR(file->f_inode->i_dev)))
 		return -EBADF;
 	if (file->f_inode->i_pipe)
 		return -ESPIPE;
@@ -64,9 +58,9 @@ int sys_read(unsigned int fd,char * buf,int count)
 	verify_area(buf,count);
 	inode = file->f_inode;
 	if (inode->i_pipe)
-		return (file->f_mode&1)?read_pipe(inode,buf,count):-EIO;
+		return (file->f_mode&1)?read_pipe(inode,buf,count):-1;
 	if (S_ISCHR(inode->i_mode))
-		return rw_char(READ,inode->i_zone[0],buf,count,&file->f_pos);
+		return rw_char(READ,inode->i_zone[0],buf,count);
 	if (S_ISBLK(inode->i_mode))
 		return block_read(inode->i_zone[0],&file->f_pos,buf,count);
 	if (S_ISDIR(inode->i_mode) || S_ISREG(inode->i_mode)) {
@@ -91,9 +85,9 @@ int sys_write(unsigned int fd,char * buf,int count)
 		return 0;
 	inode=file->f_inode;
 	if (inode->i_pipe)
-		return (file->f_mode&2)?write_pipe(inode,buf,count):-EIO;
+		return (file->f_mode&2)?write_pipe(inode,buf,count):-1;
 	if (S_ISCHR(inode->i_mode))
-		return rw_char(WRITE,inode->i_zone[0],buf,count,&file->f_pos);
+		return rw_char(WRITE,inode->i_zone[0],buf,count);
 	if (S_ISBLK(inode->i_mode))
 		return block_write(inode->i_zone[0],&file->f_pos,buf,count);
 	if (S_ISREG(inode->i_mode))

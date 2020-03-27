@@ -1,19 +1,9 @@
 /*
- *  linux/kernel/keyboard.S
- *
- *  (C) 1991  Linus Torvalds
+ *	keyboard.s
  */
-
-/*
- *	Thanks to Alfred Leung for US keyboard patches
- *		Wolfgang Thiel for German keyboard patches
- *		Marc Corsini for the French keyboard
- */
-
-#include <linux/config.h>
 
 .text
-.globl keyboard_interrupt
+.globl _keyboard_interrupt
 
 /*
  * these are for the keyboard read functions
@@ -34,7 +24,7 @@ e0:	.byte 0
  *  keyboard scan-code and converts it into the appropriate
  *  ascii character(s).
  */
-keyboard_interrupt:
+_keyboard_interrupt:
 	pushl %eax
 	pushl %ebx
 	pushl %ecx
@@ -44,13 +34,13 @@ keyboard_interrupt:
 	movl $0x10,%eax
 	mov %ax,%ds
 	mov %ax,%es
-	xor %al,%al		/* %eax is scan code */
+	xorl %al,%al		/* %eax is scan code */
 	inb $0x60,%al
 	cmpb $0xe0,%al
 	je set_e0
 	cmpb $0xe1,%al
 	je set_e1
-	call *key_table(,%eax,4)
+	call key_table(,%eax,4)
 	movb $0,e0
 e0_e1:	inb $0x61,%al
 	jmp 1f
@@ -66,7 +56,7 @@ e0_e1:	inb $0x61,%al
 	movb $0x20,%al
 	outb %al,$0x20
 	pushl $0
-	call do_tty_interrupt
+	call _do_tty_interrupt
 	addl $4,%esp
 	pop %es
 	pop %ds
@@ -88,7 +78,7 @@ set_e1:	movb $2,e0
 put_queue:
 	pushl %ecx
 	pushl %edx
-	movl table_list,%edx		# read-queue for console
+	movl _table_list,%edx		# read-queue for console
 	movl head(%edx),%ecx
 1:	movb %al,buf(%edx,%ecx)
 	incl %ecx
@@ -194,13 +184,8 @@ ok_cur:	shll $16,%eax
 	xorl %ebx,%ebx
 	jmp put_queue
 
-#if defined(KBD_FR)
-num_table:
-	.ascii "789 456 1230."
-#else
 num_table:
 	.ascii "789 456 1230,"
-#endif
 cur_table:
 	.ascii "HA5 DGC YB623"
 
@@ -208,13 +193,6 @@ cur_table:
  * this routine handles function keys
  */
 func:
-	pushl %eax
-	pushl %ecx
-	pushl %edx
-	call show_stat
-	popl %edx
-	popl %ecx
-	popl %eax
 	subb $0x3B,%al
 	jb end_func
 	cmpb $9,%al
@@ -241,13 +219,12 @@ func_table:
 	.long 0x455b5b1b,0x465b5b1b,0x475b5b1b,0x485b5b1b
 	.long 0x495b5b1b,0x4a5b5b1b,0x4b5b5b1b,0x4c5b5b1b
 
-#if	defined(KBD_FINNISH)
 key_map:
 	.byte 0,27
 	.ascii "1234567890+'"
 	.byte 127,9
 	.ascii "qwertyuiop}"
-	.byte 0,13,0
+	.byte 0,10,0
 	.ascii "asdfghjkl|{"
 	.byte 0,0
 	.ascii "'zxcvbnm,.-"
@@ -263,7 +240,7 @@ shift_map:
 	.ascii "!\"#$%&/()=?`"
 	.byte 127,9
 	.ascii "QWERTYUIOP]^"
-	.byte 13,0
+	.byte 10,0
 	.ascii "ASDFGHJKL\\["
 	.byte 0,0
 	.ascii "*ZXCVBNM;:_"
@@ -279,7 +256,7 @@ alt_map:
 	.ascii "\0@\0$\0\0{[]}\\\0"
 	.byte 0,0
 	.byte 0,0,0,0,0,0,0,0,0,0,0
-	.byte '~,13,0
+	.byte '~,10,0
 	.byte 0,0,0,0,0,0,0,0,0,0,0
 	.byte 0,0
 	.byte 0,0,0,0,0,0,0,0,0,0,0
@@ -290,162 +267,6 @@ alt_map:
 	.byte '|
 	.fill 10,1,0
 
-#elif defined(KBD_US)
-
-key_map:
-	.byte 0,27
-	.ascii "1234567890-="
-	.byte 127,9
-	.ascii "qwertyuiop[]"
-	.byte 13,0
-	.ascii "asdfghjkl;'"
-	.byte '`,0
-	.ascii "\\zxcvbnm,./"
-	.byte 0,'*,0,32		/* 36-39 */
-	.fill 16,1,0		/* 3A-49 */
-	.byte '-,0,0,0,'+	/* 4A-4E */
-	.byte 0,0,0,0,0,0,0	/* 4F-55 */
-	.byte '<
-	.fill 10,1,0
-
-
-shift_map:
-	.byte 0,27
-	.ascii "!@#$%^&*()_+"
-	.byte 127,9
-	.ascii "QWERTYUIOP{}"
-	.byte 13,0
-	.ascii "ASDFGHJKL:\""
-	.byte '~,0
-	.ascii "|ZXCVBNM<>?"
-	.byte 0,'*,0,32		/* 36-39 */
-	.fill 16,1,0		/* 3A-49 */
-	.byte '-,0,0,0,'+	/* 4A-4E */
-	.byte 0,0,0,0,0,0,0	/* 4F-55 */
-	.byte '>
-	.fill 10,1,0
-
-alt_map:
-	.byte 0,0
-	.ascii "\0@\0$\0\0{[]}\\\0"
-	.byte 0,0
-	.byte 0,0,0,0,0,0,0,0,0,0,0
-	.byte '~,13,0
-	.byte 0,0,0,0,0,0,0,0,0,0,0
-	.byte 0,0
-	.byte 0,0,0,0,0,0,0,0,0,0,0
-	.byte 0,0,0,0		/* 36-39 */
-	.fill 16,1,0		/* 3A-49 */
-	.byte 0,0,0,0,0		/* 4A-4E */
-	.byte 0,0,0,0,0,0,0	/* 4F-55 */
-	.byte '|
-	.fill 10,1,0
-
-#elif defined(KBD_GR)
-
-key_map:
-	.byte 0,27
-	.ascii "1234567890\\'"
-	.byte 127,9
-	.ascii "qwertzuiop@+"
-	.byte 13,0
-	.ascii "asdfghjkl[]^"
-	.byte 0,'#
-	.ascii "yxcvbnm,.-"
-	.byte 0,'*,0,32		/* 36-39 */
-	.fill 16,1,0		/* 3A-49 */
-	.byte '-,0,0,0,'+	/* 4A-4E */
-	.byte 0,0,0,0,0,0,0	/* 4F-55 */
-	.byte '<
-	.fill 10,1,0
-
-
-shift_map:
-	.byte 0,27
-	.ascii "!\"#$%&/()=?`"
-	.byte 127,9
-	.ascii "QWERTZUIOP\\*"
-	.byte 13,0
-	.ascii "ASDFGHJKL{}~"
-	.byte 0,''
-	.ascii "YXCVBNM;:_"
-	.byte 0,'*,0,32		/* 36-39 */
-	.fill 16,1,0		/* 3A-49 */
-	.byte '-,0,0,0,'+	/* 4A-4E */
-	.byte 0,0,0,0,0,0,0	/* 4F-55 */
-	.byte '>
-	.fill 10,1,0
-
-alt_map:
-	.byte 0,0
-	.ascii "\0@\0$\0\0{[]}\\\0"
-	.byte 0,0
-	.byte '@,0,0,0,0,0,0,0,0,0,0
-	.byte '~,13,0
-	.byte 0,0,0,0,0,0,0,0,0,0,0
-	.byte 0,0
-	.byte 0,0,0,0,0,0,0,0,0,0,0
-	.byte 0,0,0,0		/* 36-39 */
-	.fill 16,1,0		/* 3A-49 */
-	.byte 0,0,0,0,0		/* 4A-4E */
-	.byte 0,0,0,0,0,0,0	/* 4F-55 */
-	.byte '|
-	.fill 10,1,0
-
-
-#elif defined(KBD_FR)
-
-key_map:
-	.byte 0,27
-	.ascii "&{\"'(-}_/@)="
-	.byte 127,9
-	.ascii "azertyuiop^$"
-	.byte 13,0
-	.ascii "qsdfghjklm|"
-	.byte '`,0,42		/* coin sup gauche, don't know, [*|mu] */
-	.ascii "wxcvbn,;:!"
-	.byte 0,'*,0,32		/* 36-39 */
-	.fill 16,1,0		/* 3A-49 */
-	.byte '-,0,0,0,'+	/* 4A-4E */
-	.byte 0,0,0,0,0,0,0	/* 4F-55 */
-	.byte '<
-	.fill 10,1,0
-
-shift_map:
-	.byte 0,27
-	.ascii "1234567890]+"
-	.byte 127,9
-	.ascii "AZERTYUIOP<>"
-	.byte 13,0
-	.ascii "QSDFGHJKLM%"
-	.byte '~,0,'#
-	.ascii "WXCVBN?./\\"
-	.byte 0,'*,0,32		/* 36-39 */
-	.fill 16,1,0		/* 3A-49 */
-	.byte '-,0,0,0,'+	/* 4A-4E */
-	.byte 0,0,0,0,0,0,0	/* 4F-55 */
-	.byte '>
-	.fill 10,1,0
-
-alt_map:
-	.byte 0,0
-	.ascii "\0~#{[|`\\^@]}"
-	.byte 0,0
-	.byte '@,0,0,0,0,0,0,0,0,0,0
-	.byte '~,13,0
-	.byte 0,0,0,0,0,0,0,0,0,0,0
-	.byte 0,0
-	.byte 0,0,0,0,0,0,0,0,0,0,0
-	.byte 0,0,0,0		/* 36-39 */
-	.fill 16,1,0		/* 3A-49 */
-	.byte 0,0,0,0,0		/* 4A-4E */
-	.byte 0,0,0,0,0,0,0	/* 4F-55 */
-	.byte '|
-	.fill 10,1,0
-
-#else
-#error "KBD-type not defined"
-#endif
 /*
  * do_self handles "normal" keys, ie keys that don't change meaning
  * and which have just one character returns.
@@ -465,7 +286,7 @@ do_self:
 	je 2f
 	cmpb $'a,%al
 	jb 2f
-	cmpb $'},%al
+	cmpb $'z,%al
 	ja 2f
 	subb $32,%al
 2:	testb $0x0c,mode		/* ctrl */

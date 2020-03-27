@@ -1,23 +1,16 @@
 /*
- *  linux/kernel/traps.c
- *
- *  (C) 1991  Linus Torvalds
- */
-
-/*
  * 'Traps.c' handles hardware traps and faults after we have saved some
  * state in 'asm.s'. Currently mostly a debugging-aid, will be extended
  * to mainly kill the offending process (probably by giving it a signal,
  * but possibly by killing it outright if necessary).
  */
-#include <string.h> 
+#include <string.h>
 
 #include <linux/head.h>
 #include <linux/sched.h>
 #include <linux/kernel.h>
 #include <asm/system.h>
 #include <asm/segment.h>
-#include <asm/io.h>
 
 #define get_seg_byte(seg,addr) ({ \
 register char __res; \
@@ -57,8 +50,6 @@ void general_protection(void);
 void page_fault(void);
 void coprocessor_error(void);
 void reserved(void);
-void parallel_interrupt(void);
-void irq13(void);
 
 static void die(char * str,long esp_ptr,long nr)
 {
@@ -168,14 +159,12 @@ void do_stack_segment(long esp,long error_code)
 
 void do_coprocessor_error(long esp, long error_code)
 {
-	if (last_task_used_math != current)
-		return;
 	die("coprocessor error",esp,error_code);
 }
 
 void do_reserved(long esp, long error_code)
 {
-	die("reserved (15,17-47) error",esp,error_code);
+	die("reserved (15,17-31) error",esp,error_code);
 }
 
 void trap_init(void)
@@ -199,10 +188,12 @@ void trap_init(void)
 	set_trap_gate(14,&page_fault);
 	set_trap_gate(15,&reserved);
 	set_trap_gate(16,&coprocessor_error);
-	for (i=17;i<48;i++)
+	for (i=17;i<32;i++)
 		set_trap_gate(i,&reserved);
-	set_trap_gate(45,&irq13);
-	outb_p(inb_p(0x21)&0xfb,0x21);
-	outb(inb_p(0xA1)&0xdf,0xA1);
-	set_trap_gate(39,&parallel_interrupt);
+/*	__asm__("movl $0x3ff000,%%eax\n\t"
+		"movl %%eax,%%db0\n\t"
+		"movl $0x000d0303,%%eax\n\t"
+		"movl %%eax,%%db7"
+		:::"ax");*/
 }
+

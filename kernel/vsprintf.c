@@ -1,16 +1,10 @@
-/*
- *  linux/kernel/vsprintf.c
- *
- *  (C) 1991  Linus Torvalds
- */
-
 /* vsprintf.c -- Lars Wirzenius & Linus Torvalds. */
 /*
  * Wirzenius wrote this portably, Torvalds fucked it up :-)
  */
 
 #include <stdarg.h>
-#include <string.h> 
+#include <string.h>
 
 /* we use this so that we can do without the ctype library */
 #define is_digit(c)	((c) >= '0' && (c) <= '9')
@@ -55,10 +49,9 @@ static char * number(char * str, int num, int base, int size, int precision
 	} else
 		sign=(type&PLUS) ? '+' : ((type&SPACE) ? ' ' : 0);
 	if (sign) size--;
-	if (type&SPECIAL) {
+	if (type&SPECIAL)
 		if (base==16) size -= 2;
 		else if (base==8) size--;
-	}
 	i=0;
 	if (num==0)
 		tmp[i++]='0';
@@ -71,14 +64,13 @@ static char * number(char * str, int num, int base, int size, int precision
 			*str++ = ' ';
 	if (sign)
 		*str++ = sign;
-	if (type&SPECIAL) {
+	if (type&SPECIAL)
 		if (base==8)
 			*str++ = '0';
 		else if (base==16) {
 			*str++ = '0';
 			*str++ = digits[33];
 		}
-	}
 	if (!(type&LEFT))
 		while(size-->0)
 			*str++ = c;
@@ -129,7 +121,6 @@ int vsprintf(char *buf, const char *fmt, va_list args)
 		if (is_digit(*fmt))
 			field_width = skip_atoi(&fmt);
 		else if (*fmt == '*') {
-			++fmt;
 			/* it's the next argument */
 			field_width = va_arg(args, int);
 			if (field_width < 0) {
@@ -145,7 +136,6 @@ int vsprintf(char *buf, const char *fmt, va_list args)
 			if (is_digit(*fmt))
 				precision = skip_atoi(&fmt);
 			else if (*fmt == '*') {
-				++fmt;
 				/* it's the next argument */
 				precision = va_arg(args, int);
 			}
@@ -172,8 +162,6 @@ int vsprintf(char *buf, const char *fmt, va_list args)
 
 		case 's':
 			s = va_arg(args, char *);
-			if (!s)
-				s = "<NULL>";
 			len = strlen(s);
 			if (precision < 0)
 				precision = len;

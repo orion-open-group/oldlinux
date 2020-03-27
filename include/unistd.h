@@ -5,7 +5,7 @@
 #define _POSIX_VERSION 198808L
 
 #define _POSIX_CHOWN_RESTRICTED	/* only root can do a chown (I think..) */
-#define _POSIX_NO_TRUNC		/* no pathname truncation (but see in kernel) */
+/* #define _POSIX_NO_TRUNC*/	/* pathname truncation (but see in kernel) */
 #define _POSIX_VDISABLE '\0'	/* character to disable things like ^C */
 /*#define _POSIX_SAVED_IDS */	/* we'll get to this yet */
 /*#define _POSIX_JOB_CONTROL */	/* we aren't there quite yet. Soon hopefully */
@@ -124,21 +124,16 @@
 #define __NR_getppid	64
 #define __NR_getpgrp	65
 #define __NR_setsid	66
-#define __NR_sigaction	67
-#define __NR_sgetmask	68
-#define __NR_ssetmask	69
-#define __NR_setreuid	70
-#define __NR_setregid	71
 
 #define _syscall0(type,name) \
-  type name(void) \
+type name(void) \
 { \
-long __res; \
+type __res; \
 __asm__ volatile ("int $0x80" \
 	: "=a" (__res) \
 	: "0" (__NR_##name)); \
 if (__res >= 0) \
-	return (type) __res; \
+	return __res; \
 errno = -__res; \
 return -1; \
 }
@@ -146,12 +141,12 @@ return -1; \
 #define _syscall1(type,name,atype,a) \
 type name(atype a) \
 { \
-long __res; \
+type __res; \
 __asm__ volatile ("int $0x80" \
 	: "=a" (__res) \
-	: "0" (__NR_##name),"b" ((long)(a))); \
+	: "0" (__NR_##name),"b" (a)); \
 if (__res >= 0) \
-	return (type) __res; \
+	return __res; \
 errno = -__res; \
 return -1; \
 }
@@ -159,12 +154,12 @@ return -1; \
 #define _syscall2(type,name,atype,a,btype,b) \
 type name(atype a,btype b) \
 { \
-long __res; \
+type __res; \
 __asm__ volatile ("int $0x80" \
 	: "=a" (__res) \
-	: "0" (__NR_##name),"b" ((long)(a)),"c" ((long)(b))); \
+	: "0" (__NR_##name),"b" (a),"c" (b)); \
 if (__res >= 0) \
-	return (type) __res; \
+	return __res; \
 errno = -__res; \
 return -1; \
 }
@@ -172,14 +167,13 @@ return -1; \
 #define _syscall3(type,name,atype,a,btype,b,ctype,c) \
 type name(atype a,btype b,ctype c) \
 { \
-long __res; \
+type __res; \
 __asm__ volatile ("int $0x80" \
 	: "=a" (__res) \
-	: "0" (__NR_##name),"b" ((long)(a)),"c" ((long)(b)),"d" ((long)(c))); \
-if (__res>=0) \
-	return (type) __res; \
-errno=-__res; \
-return -1; \
+	: "0" (__NR_##name),"b" (a),"c" (b),"d" (c)); \
+if (__res<0) \
+	errno=-__res , __res = -1; \
+return __res;\
 }
 
 #endif /* __LIBRARY__ */
@@ -204,11 +198,10 @@ int execvp(const char * file, char ** argv);
 int execl(const char * pathname, char * arg0, ...);
 int execlp(const char * file, char * arg0, ...);
 int execle(const char * pathname, char * arg0, ...);
-//volatile void exit(int status);
-void _exit(int status);
-//volatile void _exit(int status);
+volatile void exit(int status);
+volatile void _exit(int status);
 int fcntl(int fildes, int cmd, ...);
-static int fork(void);
+int fork(void);
 int getpid(void);
 int getuid(void);
 int geteuid(void);
@@ -222,7 +215,7 @@ int mknod(const char * filename, mode_t mode, dev_t dev);
 int mount(const char * specialfile, const char * dir, int rwflag);
 int nice(int val);
 int open(const char * filename, int flag, ...);
-static int pause(void);
+int pause(void);
 int pipe(int * fildes);
 int read(int fildes, char * buf, off_t count);
 int setpgrp(void);
@@ -233,7 +226,7 @@ void (*signal(int sig, void (*fn)(int)))(int);
 int stat(const char * filename, struct stat * stat_buf);
 int fstat(int fildes, struct stat * stat_buf);
 int stime(time_t * tptr);
-static int sync(void);
+int sync(void);
 time_t time(time_t * tloc);
 time_t times(struct tms * tbuf);
 int ulimit(int cmd, long limit);

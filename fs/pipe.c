@@ -1,9 +1,3 @@
-/*
- *  linux/fs/pipe.c
- *
- *  (C) 1991  Linus Torvalds
- */
-
 #include <signal.h>
 
 #include <linux/sched.h>
@@ -12,60 +6,47 @@
 
 int read_pipe(struct m_inode * inode, char * buf, int count)
 {
-	int chars, size, read = 0;
+	char * b=buf;
 
-	while (count>0) {
-		while (!(size=PIPE_SIZE(*inode))) {
-			wake_up(&inode->i_wait);
-			if (inode->i_count != 2) /* are there any writers? */
-				return read;
-			sleep_on(&inode->i_wait);
-		}
-		chars = PAGE_SIZE-PIPE_TAIL(*inode);
-		if (chars > count)
-			chars = count;
-		if (chars > size)
-			chars = size;
-		count -= chars;
-		read += chars;
-		size = PIPE_TAIL(*inode);
-		PIPE_TAIL(*inode) += chars;
-		PIPE_TAIL(*inode) &= (PAGE_SIZE-1);
-		while (chars-->0)
-			put_fs_byte(((char *)inode->i_size)[size++],buf++);
+	while (PIPE_EMPTY(*inode)) {
+		wake_up(&inode->i_wait);
+		if (inode->i_count != 2) /* are there any writers left? */
+			return 0;
+		sleep_on(&inode->i_wait);
+	}
+	while (count>0 && !(PIPE_EMPTY(*inode))) {
+		count --;
+		put_fs_byte(((char *)inode->i_size)[PIPE_TAIL(*inode)],b++);
+		INC_PIPE( PIPE_TAIL(*inode) );
 	}
 	wake_up(&inode->i_wait);
-	return read;
+	return b-buf;
 }
 	
 int write_pipe(struct m_inode * inode, char * buf, int count)
 {
-	int chars, size, written = 0;
+	char * b=buf;
 
-	while (count>0) {
-		while (!(size=(PAGE_SIZE-1)-PIPE_SIZE(*inode))) {
+	wake_up(&inode->i_wait);
+	if (inode->i_count != 2) { /* no readers */
+		current->signal |= (1<<(SIGPIPE-1));
+		return -1;
+	}
+	while (count-->0) {
+		while (PIPE_FULL(*inode)) {
 			wake_up(&inode->i_wait);
-			if (inode->i_count != 2) { /* no readers */
+			if (inode->i_count != 2) {
 				current->signal |= (1<<(SIGPIPE-1));
-				return written?written:-1;
+				return b-buf;
 			}
 			sleep_on(&inode->i_wait);
 		}
-		chars = PAGE_SIZE-PIPE_HEAD(*inode);
-		if (chars > count)
-			chars = count;
-		if (chars > size)
-			chars = size;
-		count -= chars;
-		written += chars;
-		size = PIPE_HEAD(*inode);
-		PIPE_HEAD(*inode) += chars;
-		PIPE_HEAD(*inode) &= (PAGE_SIZE-1);
-		while (chars-->0)
-			((char *)inode->i_size)[size++]=get_fs_byte(buf++);
+		((char *)inode->i_size)[PIPE_HEAD(*inode)] = get_fs_byte(b++);
+		INC_PIPE( PIPE_HEAD(*inode) );
+		wake_up(&inode->i_wait);
 	}
 	wake_up(&inode->i_wait);
-	return written;
+	return b-buf;
 }
 
 int sys_pipe(unsigned long * fildes)

@@ -1,11 +1,4 @@
-/*
- *  linux/fs/inode.c
- *
- *  (C) 1991  Linus Torvalds
- */
-
-#include <string.h> 
-#include <sys/stat.h>
+#include <string.h>
 
 #include <linux/sched.h>
 #include <linux/kernel.h>
@@ -40,22 +33,6 @@ static inline void unlock_inode(struct m_inode * inode)
 	wake_up(&inode->i_wait);
 }
 
-void invalidate_inodes(int dev)
-{
-	int i;
-	struct m_inode * inode;
-
-	inode = 0+inode_table;
-	for(i=0 ; i<NR_INODE ; i++,inode++) {
-		wait_on_inode(inode);
-		if (inode->i_dev == dev) {
-			if (inode->i_count)
-				printk("inode in use on removed disk\n\r");
-			inode->i_dev = inode->i_dirt = 0;
-		}
-	}
-}
-
 void sync_inodes(void)
 {
 	int i;
@@ -80,7 +57,7 @@ static int _bmap(struct m_inode * inode,int block,int create)
 		panic("_bmap: block>big");
 	if (block<7) {
 		if (create && !inode->i_zone[block])
-			if ((inode->i_zone[block]=new_block(inode->i_dev))) {
+			if (inode->i_zone[block]=new_block(inode->i_dev)) {
 				inode->i_ctime=CURRENT_TIME;
 				inode->i_dirt=1;
 			}
@@ -89,7 +66,7 @@ static int _bmap(struct m_inode * inode,int block,int create)
 	block -= 7;
 	if (block<512) {
 		if (create && !inode->i_zone[7])
-			if ((inode->i_zone[7]=new_block(inode->i_dev))) {
+			if (inode->i_zone[7]=new_block(inode->i_dev)) {
 				inode->i_dirt=1;
 				inode->i_ctime=CURRENT_TIME;
 			}
@@ -99,7 +76,7 @@ static int _bmap(struct m_inode * inode,int block,int create)
 			return 0;
 		i = ((unsigned short *) (bh->b_data))[block];
 		if (create && !i)
-			if ((i=new_block(inode->i_dev))) {
+			if (i=new_block(inode->i_dev)) {
 				((unsigned short *) (bh->b_data))[block]=i;
 				bh->b_dirt=1;
 			}
@@ -108,7 +85,7 @@ static int _bmap(struct m_inode * inode,int block,int create)
 	}
 	block -= 512;
 	if (create && !inode->i_zone[8])
-		if ((inode->i_zone[8]=new_block(inode->i_dev))) {
+		if (inode->i_zone[8]=new_block(inode->i_dev)) {
 			inode->i_dirt=1;
 			inode->i_ctime=CURRENT_TIME;
 		}
@@ -118,7 +95,7 @@ static int _bmap(struct m_inode * inode,int block,int create)
 		return 0;
 	i = ((unsigned short *)bh->b_data)[block>>9];
 	if (create && !i)
-		if ((i=new_block(inode->i_dev))) {
+		if (i=new_block(inode->i_dev)) {
 			((unsigned short *) (bh->b_data))[block>>9]=i;
 			bh->b_dirt=1;
 		}
@@ -129,7 +106,7 @@ static int _bmap(struct m_inode * inode,int block,int create)
 		return 0;
 	i = ((unsigned short *)bh->b_data)[block&511];
 	if (create && !i)
-		if ((i=new_block(inode->i_dev))) {
+		if (i=new_block(inode->i_dev)) {
 			((unsigned short *) (bh->b_data))[block&511]=i;
 			bh->b_dirt=1;
 		}
@@ -164,19 +141,11 @@ void iput(struct m_inode * inode)
 		inode->i_pipe=0;
 		return;
 	}
-	if (!inode->i_dev) {
+	if (!inode->i_dev || inode->i_count>1) {
 		inode->i_count--;
 		return;
-	}
-	if (S_ISBLK(inode->i_mode)) {
-		sync_dev(inode->i_zone[0]);
-		wait_on_inode(inode);
 	}
 repeat:
-	if (inode->i_count>1) {
-		inode->i_count--;
-		return;
-	}
 	if (!inode->i_nlinks) {
 		truncate(inode);
 		free_inode(inode);
@@ -191,35 +160,40 @@ repeat:
 	return;
 }
 
+static volatile int last_allocated_inode = 0;
+
 struct m_inode * get_empty_inode(void)
 {
 	struct m_inode * inode;
-	static struct m_inode * last_inode = inode_table;
-	int i;
+	int inr;
 
-	do {
+	while (1) {
 		inode = NULL;
-		for (i = NR_INODE; i ; i--) {
-			if (++last_inode >= inode_table + NR_INODE)
-				last_inode = inode_table;
-			if (!last_inode->i_count) {
-				inode = last_inode;
-				if (!inode->i_dirt && !inode->i_lock)
-					break;
+		inr = last_allocated_inode;
+		do {
+			if (!inode_table[inr].i_count) {
+				inode = inr + inode_table;
+				break;
 			}
-		}
+			inr++;
+			if (inr>=NR_INODE)
+				inr=0;
+		} while (inr != last_allocated_inode);
 		if (!inode) {
-			for (i=0 ; i<NR_INODE ; i++)
-				printk("%04x: %6d\t",inode_table[i].i_dev,
-					inode_table[i].i_num);
+			for (inr=0 ; inr<NR_INODE ; inr++)
+				printk("%04x: %6d\t",inode_table[inr].i_dev,
+					inode_table[inr].i_num);
 			panic("No free inodes in mem");
 		}
+		last_allocated_inode = inr;
 		wait_on_inode(inode);
 		while (inode->i_dirt) {
 			write_inode(inode);
 			wait_on_inode(inode);
 		}
-	} while (inode->i_count);
+		if (!inode->i_count)
+			break;
+	}
 	memset(inode,0,sizeof(*inode));
 	inode->i_count = 1;
 	return inode;
@@ -260,24 +234,6 @@ struct m_inode * iget(int dev,int nr)
 			continue;
 		}
 		inode->i_count++;
-		if (inode->i_mount) {
-			int i;
-
-			for (i = 0 ; i<NR_SUPER ; i++)
-				if (super_block[i].s_imount==inode)
-					break;
-			if (i >= NR_SUPER) {
-				printk("Mounted inode hasn't got sb\n");
-				if (empty)
-					iput(empty);
-				return inode;
-			}
-			iput(inode);
-			dev = super_block[i].s_dev;
-			nr = ROOT_INO;
-			inode = inode_table;
-			continue;
-		}
 		if (empty)
 			iput(empty);
 		return inode;
@@ -298,8 +254,7 @@ static void read_inode(struct m_inode * inode)
 	int block;
 
 	lock_inode(inode);
-	if (!(sb=get_super(inode->i_dev)))
-		panic("trying to read inode without dev");
+	sb=get_super(inode->i_dev);
 	block = 2 + sb->s_imap_blocks + sb->s_zmap_blocks +
 		(inode->i_num-1)/INODES_PER_BLOCK;
 	if (!(bh=bread(inode->i_dev,block)))
@@ -318,12 +273,7 @@ static void write_inode(struct m_inode * inode)
 	int block;
 
 	lock_inode(inode);
-	if (!inode->i_dirt || !inode->i_dev) {
-		unlock_inode(inode);
-		return;
-	}
-	if (!(sb=get_super(inode->i_dev)))
-		panic("trying to write inode without device");
+	sb=get_super(inode->i_dev);
 	block = 2 + sb->s_imap_blocks + sb->s_zmap_blocks +
 		(inode->i_num-1)/INODES_PER_BLOCK;
 	if (!(bh=bread(inode->i_dev,block)))

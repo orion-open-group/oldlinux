@@ -1,10 +1,4 @@
-/*
- *  linux/fs/ioctl.c
- *
- *  (C) 1991  Linus Torvalds
- */
-
-/* #include <string.h>*/
+#include <string.h>
 #include <errno.h>
 #include <sys/stat.h>
 
@@ -39,7 +33,7 @@ int sys_ioctl(unsigned int fd, unsigned int cmd, unsigned long arg)
 		return -EINVAL;
 	dev = filp->f_inode->i_zone[0];
 	if (MAJOR(dev) >= NRDEVS)
-		return -ENODEV;
+		panic("unknown device for ioctl");
 	if (!ioctl_table[MAJOR(dev)])
 		return -ENOTTY;
 	return ioctl_table[MAJOR(dev)](dev,cmd,arg);

@@ -1,9 +1,3 @@
-/*
- *  linux/lib/ctype.c
- *
- *  (C) 1991  Linus Torvalds
- */
-
 #include <ctype.h>
 
 char _ctmp;

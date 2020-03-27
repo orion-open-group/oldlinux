@@ -1,17 +1,11 @@
 /*
- *  linux/kernel/rs_io.s
- *
- *  (C) 1991  Linus Torvalds
- */
-
-/*
  *	rs_io.s
  *
  * This module implements the rs232 io interrupts.
  */
 
 .text
-.globl rs1_interrupt,rs2_interrupt
+.globl _rs1_interrupt,_rs2_interrupt
 
 size	= 1024				/* must be power of two !
 					   and must match the value
@@ -31,12 +25,12 @@ startup	= 256		/* chars left in write queue when we restart it */
  * the interrupt is coming from, and take appropriate action.
  */
 .align 2
-rs1_interrupt:
-	pushl $table_list+8
+_rs1_interrupt:
+	pushl $_table_list+8
 	jmp rs_int
 .align 2
-rs2_interrupt:
-	pushl $table_list+16
+_rs2_interrupt:
+	pushl $_table_list+16
 rs_int:
 	pushl %edx
 	pushl %ecx
@@ -62,7 +56,7 @@ rep_int:
 	movl 24(%esp),%ecx
 	pushl %edx
 	subl $2,%edx
-	call *jmp_table(,%eax,2)		/* NOTE! not *4, bit0 is 0 already */
+	call jmp_table(,%eax,2)		/* NOTE! not *4, bit0 is 0 already */
 	popl %edx
 	jmp rep_int
 end:	movb $0x20,%al
@@ -95,7 +89,7 @@ line_status:
 read_char:
 	inb %dx,%al
 	movl %ecx,%edx
-	subl $table_list,%edx
+	subl $_table_list,%edx
 	shrl $3,%edx
 	movl (%ecx),%ecx		# read-queue
 	movl head(%ecx),%ebx
@@ -105,10 +99,10 @@ read_char:
 	cmpl tail(%ecx),%ebx
 	je 1f
 	movl %ebx,head(%ecx)
-1:	pushl %edx
-	call do_tty_interrupt
+	pushl %edx
+	call _do_tty_interrupt
 	addl $4,%esp
-	ret
+1:	ret
 
 .align 2
 write_char:

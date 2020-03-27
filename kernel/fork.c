@@ -1,16 +1,9 @@
 /*
- *  linux/kernel/fork.c
- *
- *  (C) 1991  Linus Torvalds
- */
-
-/*
  *  'fork.c' contains the help-routines for the 'fork' system call
  * (see also system_call.s), and some misc functions ('verify_area').
  * Fork is rather simple, once you get the hang of it, but the memory
  * management can be a bitch. See 'mm/mm.c': 'copy_page_tables()'
  */
-#include <string.h>
 #include <errno.h>
 
 #include <linux/sched.h>
@@ -51,11 +44,9 @@ int copy_mem(int nr,struct task_struct * p)
 	if (data_limit < code_limit)
 		panic("Bad data_limit");
 	new_data_base = new_code_base = nr * 0x4000000;
-	p->start_code = new_code_base;
 	set_base(p->ldt[1],new_code_base);
 	set_base(p->ldt[2],new_data_base);
 	if (copy_page_tables(old_data_base,new_data_base,data_limit)) {
-		printk("free_page_tables: from copy_mem\n");
 		free_page_tables(new_data_base,data_limit);
 		return -ENOMEM;
 	}
@@ -79,12 +70,8 @@ int copy_process(int nr,long ebp,long edi,long esi,long gs,long none,
 	p = (struct task_struct *) get_free_page();
 	if (!p)
 		return -EAGAIN;
-	task[nr] = p;
-	
-	// NOTE!: the following statement now work with gcc 4.3.2 now, and you
-	// must compile _THIS_ memcpy without no -O of gcc.#ifndef GCC4_3
 	*p = *current;	/* NOTE! this doesn't copy the supervisor stack */
-	p->state = TASK_UNINTERRUPTIBLE;
+	p->state = TASK_RUNNING;
 	p->pid = last_pid;
 	p->father = current->pid;
 	p->counter = p->priority;
@@ -116,24 +103,21 @@ int copy_process(int nr,long ebp,long edi,long esi,long gs,long none,
 	p->tss.ldt = _LDT(nr);
 	p->tss.trace_bitmap = 0x80000000;
 	if (last_task_used_math == current)
-		__asm__("clts ; fnsave %0"::"m" (p->tss.i387));
+		__asm__("fnsave %0"::"m" (p->tss.i387));
 	if (copy_mem(nr,p)) {
-		task[nr] = NULL;
 		free_page((long) p);
 		return -EAGAIN;
 	}
 	for (i=0; i<NR_OPEN;i++)
-		if ((f=p->filp[i]))
+		if (f=p->filp[i])
 			f->f_count++;
 	if (current->pwd)
 		current->pwd->i_count++;
 	if (current->root)
 		current->root->i_count++;
-	if (current->executable)
-		current->executable->i_count++;
 	set_tss_desc(gdt+(nr<<1)+FIRST_TSS_ENTRY,&(p->tss));
 	set_ldt_desc(gdt+(nr<<1)+FIRST_LDT_ENTRY,&(p->ldt));
-	p->state = TASK_RUNNING;	/* do this last, just in case */
+	task[nr] = p;	/* do this last, just in case */
 	return last_pid;
 }
 
