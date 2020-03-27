@@ -1,29 +1,41 @@
-#ifndef _CONFIG_H
-#define _CONFIG_H
+#ifndef _LINUX_CONFIG_H
+#define _LINUX_CONFIG_H
 
-/*
- * Define this if you want the math-emulation code: if this is undefined,
- * the kernel will be smaller, but you'll get FPU exceptions if you don't
- * have a 387 and are trying to use math.
- */
-
-#define KERNEL_MATH_EMULATION
-
+#include <linux/autoconf.h>
 
 /*
  * Defines for what uname() should return 
  */
+#ifndef UTS_SYSNAME
 #define UTS_SYSNAME "Linux"
+#endif
+#ifndef UTS_NODENAME
 #define UTS_NODENAME "(none)"	/* set by sethostname() */
-#define UTS_RELEASE "0"		/* patchlevel */
-#define UTS_VERSION "0.12"
+#endif
+
+#ifndef UTS_MACHINE
 #define UTS_MACHINE "i386"	/* hardware type */
+#endif
+
+#ifndef UTS_DOMAINNAME
+#define UTS_DOMAINNAME "(none)"	/* set by setdomainname() */
+#endif
+
+/*
+ * The definitions for UTS_RELEASE and UTS_VERSION are now defined
+ * in linux/version.h, and should only be used by linux/version.c
+ */
 
 /* Don't touch these, unless you really know what your doing. */
 #define DEF_INITSEG	0x9000
 #define DEF_SYSSEG	0x1000
 #define DEF_SETUPSEG	0x9020
-#define DEF_SYSSIZE	0x4000
+#define DEF_SYSSIZE	0x7F00
+
+/* internal svga startup constants */
+#define NORMAL_VGA	0xffff		/* 80x25 mode */
+#define EXTENDED_VGA	0xfffe		/* 80x50 mode */
+#define ASK_VGA		0xfffd		/* ask for it at bootup */
 
 /*
  * The root-device is no longer hard-coded. You can change the default
@@ -60,5 +72,20 @@
  If you want the BIOS to tell what kind of drive you have, just
  leave HD_TYPE undefined. This is the normal thing to do.
 */
+
+#undef HD_TYPE
+ 
+/*
+	File type specific stuff goes into this.
+*/
+
+#ifdef ASM_SRC
+#endif
+
+#ifdef C_SRC
+#endif
+
+#ifdef MAKE
+#endif
 
 #endif

@@ -1,50 +1,75 @@
 /*
  *  linux/fs/read_write.c
  *
- *  (C) 1991  Linus Torvalds
+ *  Copyright (C) 1991, 1992  Linus Torvalds
  */
 
-#include <sys/stat.h>
-#include <errno.h>
-#include <sys/types.h>
-
+#include <linux/types.h>
+#include <linux/errno.h>
+#include <linux/stat.h>
 #include <linux/kernel.h>
 #include <linux/sched.h>
+
 #include <asm/segment.h>
 
-int sys_lseek(unsigned int fd,off_t offset, unsigned int origin)
+/*
+ * Count is not yet used: but we'll probably support reading several entries
+ * at once in the future. Use count=1 in the library for future expansions.
+ */
+asmlinkage int sys_readdir(unsigned int fd, struct dirent * dirent, unsigned int count)
+{
+	int error;
+	struct file * file;
+	struct inode * inode;
+
+	if (fd >= NR_OPEN || !(file = current->filp[fd]) ||
+	    !(inode = file->f_inode))
+		return -EBADF;
+	error = -ENOTDIR;
+	if (file->f_op && file->f_op->readdir) {
+		error = verify_area(VERIFY_WRITE, dirent, sizeof (*dirent));
+		if (!error)
+			error = file->f_op->readdir(inode,file,dirent,count);
+	}
+	return error;
+}
+
+asmlinkage int sys_lseek(unsigned int fd, off_t offset, unsigned int origin)
 {
 	struct file * file;
-	int tmp;
+	int tmp = -1;
 
 	if (fd >= NR_OPEN || !(file=current->filp[fd]) || !(file->f_inode))
 		return -EBADF;
 	if (origin > 2)
 		return -EINVAL;
-	if (file->f_inode->i_pipe)
-		return -ESPIPE;
 	if (file->f_op && file->f_op->lseek)
 		return file->f_op->lseek(file->f_inode,file,offset,origin);
+
 /* this is the default handler if no lseek handler is present */
 	switch (origin) {
 		case 0:
-			if (offset<0) return -EINVAL;
-			file->f_pos=offset;
+			tmp = offset;
 			break;
 		case 1:
-			if (file->f_pos+offset<0) return -EINVAL;
-			file->f_pos += offset;
+			tmp = file->f_pos + offset;
 			break;
 		case 2:
-			if ((tmp=file->f_inode->i_size+offset) < 0)
+			if (!file->f_inode)
 				return -EINVAL;
-			file->f_pos = tmp;
+			tmp = file->f_inode->i_size + offset;
+			break;
 	}
+	if (tmp < 0)
+		return -EINVAL;
+	file->f_pos = tmp;
+	file->f_reada = 0;
 	return file->f_pos;
 }
 
-int sys_read(unsigned int fd,char * buf,unsigned int count)
+asmlinkage int sys_read(unsigned int fd,char * buf,unsigned int count)
 {
+	int error;
 	struct file * file;
 	struct inode * inode;
 
@@ -52,46 +77,32 @@ int sys_read(unsigned int fd,char * buf,unsigned int count)
 		return -EBADF;
 	if (!(file->f_mode & 1))
 		return -EBADF;
+	if (!file->f_op || !file->f_op->read)
+		return -EINVAL;
 	if (!count)
 		return 0;
-	verify_area(buf,count);
-	if (file->f_op && file->f_op->read)
-		return file->f_op->read(inode,file,buf,count);
-/* these are the default read-functions */
-	if (inode->i_pipe)
-		return pipe_read(inode,file,buf,count);
-	if (S_ISCHR(inode->i_mode))
-		return char_read(inode,file,buf,count);
-	if (S_ISBLK(inode->i_mode))
-		return block_read(inode,file,buf,count);
-	if (S_ISDIR(inode->i_mode) || S_ISREG(inode->i_mode))
-		return minix_file_read(inode,file,buf,count);
-	printk("(Read)inode->i_mode=%06o\n\r",inode->i_mode);
-	return -EINVAL;
+	error = verify_area(VERIFY_WRITE,buf,count);
+	if (error)
+		return error;
+	return file->f_op->read(inode,file,buf,count);
 }
 
-int sys_write(unsigned int fd,char * buf,unsigned int count)
+asmlinkage int sys_write(unsigned int fd,char * buf,unsigned int count)
 {
+	int error;
 	struct file * file;
 	struct inode * inode;
 	
 	if (fd>=NR_OPEN || !(file=current->filp[fd]) || !(inode=file->f_inode))
 		return -EBADF;
-	if (!(file->f_mode&2))
+	if (!(file->f_mode & 2))
 		return -EBADF;
+	if (!file->f_op || !file->f_op->write)
+		return -EINVAL;
 	if (!count)
 		return 0;
-	if (file->f_op && file->f_op->write)
-		return file->f_op->write(inode,file,buf,count);
-/* these are the default read-functions */
-	if (inode->i_pipe)
-		return pipe_write(inode,file,buf,count);
-	if (S_ISCHR(inode->i_mode))
-		return char_write(inode,file,buf,count);
-	if (S_ISBLK(inode->i_mode))
-		return block_write(inode,file,buf,count);
-	if (S_ISREG(inode->i_mode))
-		return minix_file_write(inode,file,buf,count);
-	printk("(Write)inode->i_mode=%06o\n\r",inode->i_mode);
-	return -EINVAL;
+	error = verify_area(VERIFY_READ,buf,count);
+	if (error)
+		return error;
+	return file->f_op->write(inode,file,buf,count);
 }

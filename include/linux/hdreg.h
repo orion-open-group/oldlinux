@@ -1,10 +1,11 @@
+#ifndef _LINUX_HDREG_H
+#define _LINUX_HDREG_H
+
 /*
  * This file contains some defines for the AT-hd-controller.
  * Various sources. Check out some definitions (see comments with
  * a ques).
  */
-#ifndef _HDREG_H
-#define _HDREG_H
 
 /* Hd controller regs. Ref: IBM AT Bios-listing */
 #define HD_DATA		0x1f0	/* _CTL when writing */
@@ -42,26 +43,22 @@
 #define WIN_SPECIFY		0x91
 
 /* Bits for HD_ERROR */
-#define MARK_ERR	0x01	/* Bad address mark ? */
+#define MARK_ERR	0x01	/* Bad address mark */
 #define TRK0_ERR	0x02	/* couldn't find track 0 */
-#define ABRT_ERR	0x04	/* ? */
-#define ID_ERR		0x10	/* ? */
-#define ECC_ERR		0x40	/* ? */
-#define	BBD_ERR		0x80	/* ? */
+#define ABRT_ERR	0x04	/* Command aborted */
+#define ID_ERR		0x10	/* ID field not found */
+#define ECC_ERR		0x40	/* Uncorrectable ECC error */
+#define	BBD_ERR		0x80	/* block marked bad */
 
-#define EXTENDED_PARTITION 5
 
-struct partition {
-	unsigned char boot_ind;		/* 0x80 - active */
-	unsigned char head;		/* starting head */
-	unsigned char sector;		/* starting sector */
-	unsigned char cyl;		/* starting cylinder */
-	unsigned char sys_ind;		/* What partition type */
-	unsigned char end_head;		/* end head */
-	unsigned char end_sector;	/* end sector */
-	unsigned char end_cyl;		/* end cylinder */
-	unsigned int start_sect;	/* starting sector counting from 0 */
-	unsigned int nr_sects;		/* nr of sectors in partition */
+/* HDIO_GETGEO is the preferred choice - HDIO_REQ will be removed at some
+   later date */
+#define HDIO_REQ 0x301
+#define HDIO_GETGEO 0x301
+struct hd_geometry {
+      unsigned char heads;
+      unsigned char sectors;
+      unsigned short cylinders;
+      unsigned long start;
 };
-
 #endif

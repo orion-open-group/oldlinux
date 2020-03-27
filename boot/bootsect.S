@@ -1,51 +1,61 @@
 !
 ! SYS_SIZE is the number of clicks (16 bytes) to be loaded.
-! 0x3000 is 0x30000 bytes = 196kB, more than enough for current
-! versions of linux
+! 0x7F00 is 0x7F000 bytes = 508kB, more than enough for current
+! versions of linux which compress the kernel
 !
 #include <linux/config.h>
 SYSSIZE = DEF_SYSSIZE
 !
-!	bootsect.s		(C) 1991 Linus Torvalds
+!	bootsect.s		Copyright (C) 1991, 1992 Linus Torvalds
 !	modified by Drew Eckhardt
+!	modified by Bruce Evans (bde)
 !
 ! bootsect.s is loaded at 0x7c00 by the bios-startup routines, and moves
-! iself out of the way to address 0x90000, and jumps there.
+! itself out of the way to address 0x90000, and jumps there.
+!
+! bde - should not jump blindly, there may be systems with only 512K low
+! memory.  Use int 0x12 to get the top of memory, etc.
 !
 ! It then loads 'setup' directly after itself (0x90200), and the system
 ! at 0x10000, using BIOS interrupts. 
 !
-! NOTE! currently system is at most 8*65536 bytes long. This should be no
-! problem, even in the future. I want to keep it simple. This 512 kB
+! NOTE! currently system is at most (8*65536-4096) bytes long. This should 
+! be no problem, even in the future. I want to keep it simple. This 508 kB
 ! kernel size should be enough, especially as this doesn't contain the
-! buffer cache as in minix
+! buffer cache as in minix (and especially now that the kernel is 
+! compressed :-)
 !
 ! The loader has been made as simple as possible, and continuos
 ! read errors will result in a unbreakable loop. Reboot by hand. It
-! loads pretty fast by getting whole sectors at a time whenever possible.
+! loads pretty fast by getting whole tracks at a time whenever possible.
 
-.globl begtext, begdata, begbss, endtext, enddata, endbss
-.text
-begtext:
-.data
-begdata:
-.bss
-begbss:
 .text
 
-SETUPLEN = 4				! nr of setup-sectors
-BOOTSEG  = 0x07c0			! original address of boot-sector
-INITSEG  = DEF_INITSEG			! we move boot here - out of the way
-SETUPSEG = DEF_SETUPSEG			! setup starts here
-SYSSEG   = DEF_SYSSEG			! system loaded at 0x10000 (65536).
-ENDSEG   = SYSSEG + SYSSIZE		! where to stop loading
+SETUPSECS = 4				! nr of setup-sectors
+BOOTSEG   = 0x07C0			! original address of boot-sector
+INITSEG   = DEF_INITSEG			! we move boot here - out of the way
+SETUPSEG  = DEF_SETUPSEG		! setup starts here
+SYSSEG    = DEF_SYSSEG			! system loaded at 0x10000 (65536).
 
 ! ROOT_DEV & SWAP_DEV are now written by "build".
 ROOT_DEV = 0
 SWAP_DEV = 0
+#ifndef SVGA_MODE
+#define SVGA_MODE ASK_VGA
+#endif
+#ifndef RAMDISK
+#define RAMDISK 0
+#endif 
+#ifndef CONFIG_ROOT_RDONLY
+#define CONFIG_ROOT_RDONLY 0
+#endif
 
-entry start
-start:
+! ld86 requires an entry symbol. This may as well be the usual one.
+.globl	_main
+_main:
+#if 0 /* hook for debugger, harmless unless BIOS is fussy (old HP) */
+	int	3
+#endif
 	mov	ax,#BOOTSEG
 	mov	ds,ax
 	mov	ax,#INITSEG
@@ -55,17 +65,23 @@ start:
 	sub	di,di
 	cld
 	rep
-	movw
+	movsw
 	jmpi	go,INITSEG
 
 go:	mov	ax,cs		
-	mov	dx,#0xfef4	! arbitrary value >>512 - disk parm size
+	mov	dx,#0x4000-12	! 0x4000 is arbitrary value >= length of
+				! bootsect + length of setup + room for stack
+				! 12 is disk parm size
+
+! bde - changed 0xff00 to 0x4000 to use debugger at 0x6400 up (bde).  We
+! wouldn't have to worry about this if we checked the top of memory.  Also
+! my BIOS can be configured to put the wini drive tables in high memory
+! instead of in the vector table.  The old stack might have clobbered the
+! drive table.
 
 	mov	ds,ax
 	mov	es,ax
-	push	ax
-
-	mov	ss,ax		! put stack at 0x9ff00 - 12.
+	mov	ss,ax		! put stack at INITSEG:0x4000-12.
 	mov	sp,dx
 /*
  *	Many BIOS's default disk parameter tables will not 
@@ -96,7 +112,7 @@ go:	mov	ax,cs
 
 	rep
 	seg gs
-	movw
+	movsw
 
 	mov	di,dx
 	movb	4(di),*18		! patch sector count
@@ -106,7 +122,7 @@ go:	mov	ax,cs
 	seg fs
 	mov	2(bx),es
 
-	pop	ax
+	mov	ax,cs
 	mov	fs,ax
 	mov	gs,ax
 	
@@ -121,7 +137,8 @@ load_setup:
 	xor	dx, dx			! drive 0, head 0
 	mov	cx,#0x0002		! sector 2, track 0
 	mov	bx,#0x0200		! address = 512, in INITSEG
-	mov	ax,#0x0200+SETUPLEN	! service 2, nr of sectors
+	mov	ax,#0x0200+SETUPSECS	! service 2, nr of sectors
+					! (assume all on head 0, track 0)
 	int	0x13			! read it
 	jnc	ok_load_setup		! ok - continue
 
@@ -134,16 +151,43 @@ load_setup:
 	xor	dl, dl			! reset FDC
 	xor	ah, ah
 	int	0x13
-	j	load_setup
+	jmp	load_setup
 
 ok_load_setup:
 
 ! Get disk drive parameters, specifically nr of sectors/track
 
+#if 0
+
+! bde - the Phoenix BIOS manual says function 0x08 only works for fixed
+! disks.  It doesn't work for one of my BIOS's (1987 Award).  It was
+! fatal not to check the error code.
+
 	xor	dl,dl
 	mov	ah,#0x08		! AH=8 is get drive parameters
 	int	0x13
 	xor	ch,ch
+#else
+
+! It seems that there is no BIOS call to get the number of sectors.  Guess
+! 18 sectors if sector 18 can be read, 15 if sector 15 can be read.
+! Otherwise guess 9.
+
+	xor	dx, dx			! drive 0, head 0
+	mov	cx,#0x0012		! sector 18, track 0
+	mov	bx,#0x0200+SETUPSECS*0x200  ! address after setup (es = cs)
+	mov	ax,#0x0201		! service 2, 1 sector
+	int	0x13
+	jnc	got_sectors
+	mov	cl,#0x0f		! sector 15
+	mov	ax,#0x0201		! service 2, 1 sector
+	int	0x13
+	jnc	got_sectors
+	mov	cl,#0x09
+
+#endif
+
+got_sectors:
 	seg cs
 	mov	sectors,cx
 	mov	ax,#INITSEG
@@ -187,8 +231,7 @@ ok_load_setup:
 	mov	ax,#0x021c		! /dev/PS0 - 1.44Mb
 	cmp	bx,#18
 	je	root_defined
-undef_root:
-	jmp undef_root
+	mov	ax,#0x0200		! /dev/fd0 - autodetect
 root_defined:
 	seg cs
 	mov	root_dev,ax
@@ -205,7 +248,7 @@ root_defined:
 !
 ! in:	es - starting address segment (normally 0x1000)
 !
-sread:	.word 1+SETUPLEN	! sectors read of current track
+sread:	.word 1+SETUPSECS	! sectors read of current track
 head:	.word 0			! current head
 track:	.word 0			! current track
 
@@ -216,8 +259,9 @@ die:	jne die			! es must be at 64kB boundary
 	xor bx,bx		! bx is starting address within segment
 rp_read:
 	mov ax,es
-	cmp ax,#ENDSEG		! have we loaded all yet?
-	jb ok1_read
+	sub ax,#SYSSEG
+	cmp ax,syssize		! have we loaded all yet?
+	jbe ok1_read
 	ret
 ok1_read:
 	seg cs
@@ -264,23 +308,23 @@ read_track:
  	int	0x10
 	popa		
 
-	mov dx,track
-	mov cx,sread
-	inc cx
-	mov ch,dl
-	mov dx,head
-	mov dh,dl
-	and dx,#0x0100
-	mov ah,#2
+	mov	dx,track
+	mov	cx,sread
+	inc	cx
+	mov	ch,dl
+	mov	dx,head
+	mov	dh,dl
+	and	dx,#0x0100
+	mov	ah,#2
 	
 	push	dx				! save for error dump
 	push	cx
 	push	bx
 	push	ax
 
-	int 0x13
-	jc bad_rt
-	add	sp, #8   	
+	int	0x13
+	jc	bad_rt
+	add	sp, #8
 	popa
 	ret
 
@@ -317,16 +361,18 @@ print_all:
 print_loop:
 	push	cx		! save count left
 	call	print_nl	! nl for readability
+
+	cmp	cl, 5
 	jae	no_reg		! see if register name is needed
 	
-	mov	ax, #0xe05 + 0x41 - 1
+	mov	ax, #0xe05 + 'A - 1
 	sub	al, cl
 	int	0x10
 
-	mov	al, #0x58 	! X
+	mov	al, #'X
 	int	0x10
 
-	mov	al, #0x3a 	! :
+	mov	al, #':
 	int	0x10
 
 no_reg:
@@ -356,10 +402,10 @@ print_digit:
 	mov	ah, #0xe	
 	mov	al, dl		! mask off so we have only next nibble
 	and	al, #0xf
-	add	al, #0x30	! convert to 0 based digit, '0'
-	cmp	al, #0x39	! check for overflow
+	add	al, #'0		! convert to 0-based digit
+	cmp	al, #'9		! check for overflow
 	jbe	good_digit
-	add	al, #0x41 - 0x30 - 0xa 	! 'A' - '0' - 0xa
+	add	al, #'A - '0 - 10
 
 good_digit:
 	int	0x10
@@ -387,18 +433,18 @@ msg1:
 	.byte 13,10
 	.ascii "Loading"
 
-.org 506
+.org 498
+root_flags:
+	.word CONFIG_ROOT_RDONLY
+syssize:
+	.word SYSSIZE
 swap_dev:
 	.word SWAP_DEV
+ram_size:
+	.word RAMDISK
+vid_mode:
+	.word SVGA_MODE
 root_dev:
 	.word ROOT_DEV
 boot_flag:
 	.word 0xAA55
-
-.text
-endtext:
-.data
-enddata:
-.bss
-endbss:
-

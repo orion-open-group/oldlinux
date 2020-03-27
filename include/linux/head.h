@@ -1,11 +1,11 @@
-#ifndef _HEAD_H
-#define _HEAD_H
+#ifndef _LINUX_HEAD_H
+#define _LINUX_HEAD_H
 
 typedef struct desc_struct {
 	unsigned long a,b;
 } desc_table[256];
 
-extern unsigned long pg_dir[1024];
+extern unsigned long swapper_pg_dir[1024];
 extern desc_table idt,gdt;
 
 #define GDT_NUL 0
