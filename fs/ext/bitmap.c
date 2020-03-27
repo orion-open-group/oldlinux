@@ -1,22 +1,22 @@
 /*
  *  linux/fs/ext/bitmap.c
  *
- *  (C) 1992  Remy Card (card@masi.ibp.fr)
+ *  Copyright (C) 1992  Remy Card (card@masi.ibp.fr)
  *
  *  from
  *
  *  linux/fs/minix/bitmap.c
  *
- *  (C) 1991  Linus Torvalds
+ *  Copyright (C) 1991, 1992  Linus Torvalds
  */
 
 /* bitmap.c contains the code that handles the inode and block bitmaps */
 
 
-#include <linux/string.h>
 #include <linux/sched.h>
 #include <linux/ext_fs.h>
 #include <linux/kernel.h>
+#include <linux/string.h>
 
 #ifdef EXTFS_BITMAP
 
@@ -203,6 +203,7 @@ struct inode * ext_new_inode(int dev)
 		iput(inode);
 		return NULL;
 	}
+	inode->i_flags = inode->i_sb->s_flags;
 	j = 8192;
 	for (i=0 ; i<8 ; i++)
 		if (bh=inode->i_sb->s_imap[i])

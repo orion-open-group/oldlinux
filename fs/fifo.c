@@ -4,11 +4,10 @@
  *  written by Paul H. Hargrove
  */
 
-#include <errno.h>
-
-#include <linux/fcntl.h>
 #include <linux/sched.h>
 #include <linux/kernel.h>
+#include <linux/errno.h>
+#include <linux/fcntl.h>
 
 extern struct file_operations read_pipe_fops;
 extern struct file_operations write_pipe_fops;
@@ -87,7 +86,7 @@ static int fifo_open(struct inode * inode,struct file * filp)
 		wake_up(&PIPE_WRITE_WAIT(*inode));
 	if (retval || inode->i_size)
 		return retval;
-	page = get_free_page();
+	page = get_free_page(GFP_KERNEL);
 	if (inode->i_size) {
 		free_page(page);
 		return 0;

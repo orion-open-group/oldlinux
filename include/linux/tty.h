@@ -1,3 +1,6 @@
+#ifndef _LINUX_TTY_H
+#define _LINUX_TTY_H
+
 /*
  * 'tty.h' defines some structures used by tty_io.c and some defines.
  *
@@ -6,8 +9,7 @@
  * offsets into 'tty_queue'
  */
 
-#ifndef _TTY_H
-#define _TTY_H
+#include <linux/termios.h>
 
 #include <asm/system.h>
 
@@ -16,13 +18,45 @@
 #define NR_PTYS		4
 
 /*
+ * These are set up by the setup-routine at boot-time:
+ */
+
+struct screen_info {
+	unsigned char  orig_x;
+	unsigned char  orig_y;
+	unsigned char  unused1[2];
+	unsigned short orig_video_page;
+	unsigned char  orig_video_mode;
+	unsigned char  orig_video_cols;
+	unsigned short orig_video_ega_ax;
+	unsigned short orig_video_ega_bx;
+	unsigned short orig_video_ega_cx;
+	unsigned char  orig_video_lines;
+};
+
+extern struct screen_info screen_info;
+
+#define ORIG_X			(screen_info.orig_x)
+#define ORIG_Y			(screen_info.orig_y)
+#define ORIG_VIDEO_PAGE		(screen_info.orig_video_page)
+#define ORIG_VIDEO_MODE		(screen_info.orig_video_mode)
+#define ORIG_VIDEO_COLS 	(screen_info.orig_video_cols)
+#define ORIG_VIDEO_EGA_AX	(screen_info.orig_video_ega_ax)
+#define ORIG_VIDEO_EGA_BX	(screen_info.orig_video_ega_bx)
+#define ORIG_VIDEO_EGA_CX	(screen_info.orig_video_ega_cx)
+#define ORIG_VIDEO_LINES	(screen_info.orig_video_lines)
+
+#define VIDEO_TYPE_MDA		0x10	/* Monochrome Text Display	*/
+#define VIDEO_TYPE_CGA		0x11	/* CGA Display 			*/
+#define VIDEO_TYPE_EGAM		0x20	/* EGA/VGA in Monochrome Mode	*/
+#define VIDEO_TYPE_EGAC		0x21	/* EGA/VGA in Color Mode	*/
+
+/*
  * This character is the same as _POSIX_VDISABLE: it cannot be used as
  * a c_cc[] character, but indicates that a particular special character
  * isn't in use (eg VINTR ahs no character etc)
  */
 #define __DISABLED_CHAR '\0'
-
-#include <termios.h>
 
 #define TTY_BUF_SIZE 2048
 
@@ -30,7 +64,7 @@ struct tty_queue {
 	unsigned long data;
 	unsigned long head;
 	unsigned long tail;
-	struct task_struct * proc_list;
+	struct wait_queue * proc_list;
 	unsigned char buf[TTY_BUF_SIZE];
 };
 
@@ -69,8 +103,6 @@ struct serial_struct {
 extern void put_tty_queue(char c, struct tty_queue * queue);
 extern int get_tty_queue(struct tty_queue * queue);
 
-#define PUTCH(c,queue) put_tty_queue((c),(queue))
-#define GETCH(queue) get_tty_queue(queue)
 #define INTR_CHAR(tty) ((tty)->termios.c_cc[VINTR])
 #define QUIT_CHAR(tty) ((tty)->termios.c_cc[VQUIT])
 #define ERASE_CHAR(tty) ((tty)->termios.c_cc[VERASE])
@@ -128,11 +160,36 @@ struct tty_struct {
 /*
  * so that interrupts won't be able to mess up the
  * queues, copy_to_cooked must be atomic with repect
- * to itself, as must tty->write. These are the flag bits.
+ * to itself, as must tty->write. These are the flag
+ * bit-numbers. Use the set_bit() and clear_bit()
+ * macros to make it all atomic.
  */
-#define TTY_WRITE_BUSY 1
-#define TTY_READ_BUSY 2
-#define TTY_CR_PENDING 4
+#define TTY_WRITE_BUSY 0
+#define TTY_READ_BUSY 1
+#define TTY_CR_PENDING 2
+
+/*
+ * These have to be done with inline assembly: that way the bit-setting
+ * is guaranteed to be atomic. Both set_bit and clear_bit return 0
+ * if the bit-setting went ok, != 0 if the bit already was set/cleared.
+ */
+extern inline int set_bit(int nr,int * addr)
+{
+	char ok;
+
+	__asm__ __volatile__("btsl %1,%2\n\tsetb %0":
+		"=q" (ok):"r" (nr),"m" (*(addr)));
+	return ok;
+}
+
+extern inline int clear_bit(int nr, int * addr)
+{
+	char ok;
+
+	__asm__ __volatile__("btrl %1,%2\n\tsetnb %0":
+		"=q" (ok):"r" (nr),"m" (*(addr)));
+	return ok;
+}
 
 #define TTY_WRITE_FLUSH(tty) tty_write_flush((tty))
 #define TTY_READ_FLUSH(tty) tty_read_flush((tty))
@@ -166,6 +223,7 @@ extern long tty_init(long);
 
 extern void flush_input(struct tty_struct * tty);
 extern void flush_output(struct tty_struct * tty);
+extern void wait_until_sent(struct tty_struct * tty);
 extern void copy_to_cooked(struct tty_struct * tty);
 
 extern int tty_ioctl(struct inode *, struct file *, unsigned int, unsigned int);

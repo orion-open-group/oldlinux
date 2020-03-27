@@ -1,5 +1,5 @@
-#ifndef _TIMER_H
-#define _TIMER_H
+#ifndef _LINUX_TIMER_H
+#define _LINUX_TIMER_H
 
 /*
  * DON'T CHANGE THESE!! Most of them are hardcoded into some assembly language

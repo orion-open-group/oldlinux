@@ -7,9 +7,11 @@
 #include <linux/sched.h>
 #include <linux/kernel.h>
 #include <linux/mm.h>
+#include <linux/errno.h>
+
 #include <asm/segment.h>
 #include <asm/system.h>
-#include <errno.h>
+
 #include <sys/mman.h>
 
 /*
@@ -57,7 +59,7 @@ mmap_chr(unsigned long addr, size_t len, int prot, int flags,
 		return (caddr_t)-ENODEV;
 
 	/*
-	 * we only allow mappings from address 0 to HIGH_MEMORY, since thats
+	 * we only allow mappings from address 0 to high_memory, since thats
 	 * the range of our memory [actually this is a lie. the buffer cache
 	 * and ramdisk occupy higher memory, but the paging stuff won't
 	 * let us map to it anyway, so we break it here].
@@ -71,7 +73,7 @@ mmap_chr(unsigned long addr, size_t len, int prot, int flags,
 	 * truly useful.
 	 */
 
-	if (len > HIGH_MEMORY || off > HIGH_MEMORY - len) /* avoid overflow */
+	if (len > high_memory || off > high_memory - len) /* avoid overflow */
 		return (caddr_t)-ENXIO;
 
 	if (remap_page_range(addr, off, len, PERMISS(flags, prot)))

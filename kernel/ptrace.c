@@ -6,12 +6,11 @@
 #include <linux/kernel.h>
 #include <linux/sched.h>
 #include <linux/mm.h>
+#include <linux/errno.h>
+#include <linux/ptrace.h>
 
 #include <asm/segment.h>
 #include <asm/system.h>
-
-#include <errno.h>
-#include <sys/ptrace.h>
 
 /*
  * does not yet catch signals sent when the child dies.
@@ -31,15 +30,12 @@
  */
 #define MAGICNUMBER 68
 
-void do_no_page(unsigned long, unsigned long, struct task_struct *, unsigned long);
-void write_verify(unsigned long);
-
 /* change a pid into a task struct. */
 static inline struct task_struct * get_task(int pid)
 {
 	int i;
 
-	for (i = 0; i < NR_TASKS; i++) {
+	for (i = 1; i < NR_TASKS; i++) {
 		if (task[i] != NULL && (task[i]->pid == pid))
 			return task[i];
 	}
@@ -135,7 +131,7 @@ repeat:
 		goto repeat;
 	}
 	if (!(page & PAGE_RW)) {
-		write_verify(addr);
+		do_wp_page(0,addr,tsk,0);
 		goto repeat;
 	}
 	page &= 0xfffff000;
@@ -238,7 +234,9 @@ int sys_ptrace(long request, long pid, long addr, long data)
 	if (request == PTRACE_ATTACH) {
 		long tmp;
 
-		if ((!current->dumpable || (current->uid != child->euid) ||
+		if (child == current)
+			return -EPERM;
+		if ((!child->dumpable || (current->uid != child->euid) ||
 	 	    (current->gid != child->egid)) && !suser())
 			return -EPERM;
 		/* the same process cannot be attached many times */

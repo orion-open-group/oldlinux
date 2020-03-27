@@ -1,21 +1,21 @@
 /*
  *  linux/kernel/sys.c
  *
- *  (C) 1991  Linus Torvalds
+ *  Copyright (C) 1991, 1992  Linus Torvalds
  */
 
-#include <errno.h>
-
+#include <linux/errno.h>
 #include <linux/sched.h>
 #include <linux/tty.h>
 #include <linux/kernel.h>
 #include <linux/config.h>
-#include <asm/segment.h>
-#include <sys/times.h>
+#include <linux/times.h>
 #include <linux/utsname.h>
-#include <sys/param.h>
-#include <sys/resource.h>
+#include <linux/param.h>
+#include <linux/resource.h>
 #include <linux/string.h>
+
+#include <asm/segment.h>
 
 /*
  * this indicates wether you can reboot with ctrl-alt-del: the deault is yes
@@ -165,8 +165,7 @@ void ctrl_alt_del(void)
 	if (C_A_D)
 		hard_reset_now();
 	else
-		if (task[1])
-			send_sig(SIGINT,task[1],1);
+		send_sig(SIGINT,task[1],1);
 }
 	
 

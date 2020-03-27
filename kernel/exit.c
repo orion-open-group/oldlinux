@@ -1,19 +1,19 @@
 /*
  *  linux/kernel/exit.c
  *
- *  (C) 1991  Linus Torvalds
+ *  Copyright (C) 1991, 1992  Linus Torvalds
  */
 
 #define DEBUG_PROC_TREE
 
-#include <errno.h>
-#include <signal.h>
-#include <sys/wait.h>
-
+#include <linux/wait.h>
+#include <linux/errno.h>
+#include <linux/signal.h>
 #include <linux/sched.h>
 #include <linux/kernel.h>
 #include <linux/mm.h>
 #include <linux/tty.h>
+
 #include <asm/segment.h>
 
 int sys_close(int fd);
@@ -421,6 +421,7 @@ int sys_waitpid(pid_t pid,unsigned long * stat_addr, int options)
 	if (stat_addr)
 		verify_area(stat_addr,4);
 repeat:
+	current->signal &= ~(1<<(SIGCHLD-1));
 	flag=0;
  	for (p = current->p_cptr ; p ; p = p->p_osptr) {
 		if (pid>0) {

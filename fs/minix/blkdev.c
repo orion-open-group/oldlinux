@@ -1,11 +1,10 @@
 /*
  *  linux/fs/minix/blkdev.c
  *
- *  (C) 1991  Linus Torvalds
+ *  Copyright (C) 1991, 1992  Linus Torvalds
  */
 
-#include <errno.h>
-
+#include <linux/errno.h>
 #include <linux/sched.h>
 #include <linux/minix_fs.h>
 #include <linux/tty.h>

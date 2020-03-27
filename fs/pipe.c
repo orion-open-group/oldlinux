@@ -1,18 +1,17 @@
 /*
  *  linux/fs/pipe.c
  *
- *  (C) 1991  Linus Torvalds
+ *  Copyright (C) 1991, 1992  Linus Torvalds
  */
-
-#include <signal.h>
-#include <errno.h>
-#include <termios.h>
 
 #include <asm/segment.h>
 
-#include <linux/fcntl.h>
 #include <linux/sched.h>
 #include <linux/kernel.h>
+#include <linux/errno.h>
+#include <linux/signal.h>
+#include <linux/fcntl.h>
+#include <linux/termios.h>
 
 static int pipe_read(struct inode * inode, struct file * filp, char * buf, int count)
 {
@@ -117,6 +116,28 @@ static int pipe_ioctl(struct inode *pino, struct file * filp,
 	}
 }
 
+static int pipe_select(struct inode * inode, struct file * filp, int sel_type, select_table * wait)
+{
+	switch (sel_type) {
+		case SEL_IN:
+			if (!PIPE_EMPTY(*inode) || !PIPE_WRITERS(*inode))
+				return 1;
+			select_wait(&PIPE_READ_WAIT(*inode), wait);
+			return 0;
+		case SEL_OUT:
+			if (!PIPE_FULL(*inode) || !PIPE_WRITERS(*inode))
+				return 1;
+			select_wait(&PIPE_WRITE_WAIT(*inode), wait);
+			return 0;
+		case SEL_EX:
+			if (!PIPE_READERS(*inode) || !PIPE_WRITERS(*inode))
+				return 1;
+			select_wait(&inode->i_wait,wait);
+			return 0;
+	}
+	return 0;
+}
+
 /*
  * Ok, these three routines NOW keep track of readers/writers,
  * Linus previously did it with inode->i_count checking.
@@ -150,7 +171,7 @@ struct file_operations read_pipe_fops = {
 	pipe_read,
 	bad_pipe_rw,
 	pipe_readdir,
-	NULL,		/* pipe_select */
+	pipe_select,
 	pipe_ioctl,
 	NULL,		/* no special open code */
 	pipe_read_release
@@ -161,7 +182,7 @@ struct file_operations write_pipe_fops = {
 	bad_pipe_rw,
 	pipe_write,
 	pipe_readdir,
-	NULL,		/* pipe_select */
+	pipe_select,
 	pipe_ioctl,
 	NULL,		/* no special open code */
 	pipe_write_release
@@ -172,7 +193,7 @@ struct file_operations rdwr_pipe_fops = {
 	pipe_read,
 	pipe_write,
 	pipe_readdir,
-	NULL,		/* pipe_select */
+	pipe_select,
 	pipe_ioctl,
 	NULL,		/* no special open code */
 	pipe_rdwr_release
@@ -186,14 +207,13 @@ int sys_pipe(unsigned long * fildes)
 	int i,j;
 
 	verify_area(fildes,8);
-	j=0;
-	for(i=0;j<2 && i<NR_FILE;i++)
-		if (!file_table[i].f_count)
-			(f[j++]=i+file_table)->f_count++;
+	for(j=0 ; j<2 ; j++)
+		if (!(f[j] = get_empty_filp()))
+			break;
 	if (j==1)
-		f[0]->f_count=0;
+		f[0]->f_count--;
 	if (j<2)
-		return -1;
+		return -ENFILE;
 	j=0;
 	for(i=0;j<2 && i<NR_OPEN;i++)
 		if (!current->filp[i]) {
@@ -203,14 +223,16 @@ int sys_pipe(unsigned long * fildes)
 	if (j==1)
 		current->filp[fd[0]]=NULL;
 	if (j<2) {
-		f[0]->f_count=f[1]->f_count=0;
-		return -1;
+		f[0]->f_count--;
+		f[1]->f_count--;
+		return -EMFILE;
 	}
 	if (!(inode=get_pipe_inode())) {
-		current->filp[fd[0]] =
-			current->filp[fd[1]] = NULL;
-		f[0]->f_count = f[1]->f_count = 0;
-		return -1;
+		current->filp[fd[0]] = NULL;
+		current->filp[fd[1]] = NULL;
+		f[0]->f_count--;
+		f[1]->f_count--;
+		return -ENFILE;
 	}
 	f[0]->f_inode = f[1]->f_inode = inode;
 	f[0]->f_pos = f[1]->f_pos = 0;

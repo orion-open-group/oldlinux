@@ -1,13 +1,13 @@
 /*
  *  linux/fs/ext/namei.c
  *
- *  (C) 1992  Remy Card (card@masi.ibp.fr)
+ *  Copyright (C) 1992  Remy Card (card@masi.ibp.fr)
  *
  *  from
  *
  *  linux/fs/minix/namei.c
  *
- *  (C) 1991  Linus Torvalds
+ *  Copyright (C) 1991, 1992  Linus Torvalds
  */
 
 #include <linux/sched.h>
@@ -16,9 +16,10 @@
 #include <linux/string.h>
 #include <linux/stat.h>
 #include <linux/fcntl.h>
+#include <linux/errno.h>
+
 #include <asm/segment.h>
 
-#include <errno.h>
 #include <const.h>
 
 /*
@@ -110,7 +111,7 @@ static struct buffer_head * ext_find_entry(struct inode * dir,
 /*	entries = dir->i_size / (sizeof (struct ext_dir_entry)); */
 	if (!(block = dir->i_data[0]))
 		return NULL;
-	if (!(bh = bread(dir->i_dev,block)))
+	if (!(bh = bread(dir->i_dev, block, BLOCK_SIZE)))
 		return NULL;
 	if (prev_dir)
 		*prev_dir = NULL;
@@ -124,7 +125,7 @@ static struct buffer_head * ext_find_entry(struct inode * dir,
 			brelse(bh);
 			bh = NULL;
 			if (!(block = ext_bmap(dir,offset>>BLOCK_SIZE_BITS)) ||
-			    !(bh = bread(dir->i_dev,block))) {
+			    !(bh = bread(dir->i_dev, block, BLOCK_SIZE))) {
 /*				i += EXT_DIR_ENTRIES_PER_BLOCK; */
 /* 				offset += BLOCK_SIZE; */
 				continue;
@@ -214,7 +215,7 @@ static struct buffer_head * ext_add_entry(struct inode * dir,
 		return NULL;
 	if (!(block = dir->i_data[0]))
 		return NULL;
-	if (!(bh = bread(dir->i_dev,block)))
+	if (!(bh = bread(dir->i_dev, block, BLOCK_SIZE)))
 		return NULL;
 	rec_len = ((8 + namelen + EXT_DIR_PAD - 1) / EXT_DIR_PAD) * EXT_DIR_PAD;
 /*	i = 0; */
@@ -230,7 +231,7 @@ printk ("ext_add_entry: skipping to next block\n");
 			block = ext_create_block(dir,offset>>BLOCK_SIZE_BITS);
 			if (!block)
 				return NULL;
-			if (!(bh = bread(dir->i_dev,block))) {
+			if (!(bh = bread(dir->i_dev, block, BLOCK_SIZE))) {
 /*				i += EXT_DIR_ENTRIES_PER_BLOCK; */
 				offset += BLOCK_SIZE;
 				continue;
@@ -263,7 +264,7 @@ printk ("ext_add_entry : creating next block\n");
 #endif
 				if (!block)
 					return NULL;
-				if (!(bh = bread(dir->i_dev,block)))
+				if (!(bh = bread(dir->i_dev, block, BLOCK_SIZE)))
 					return NULL; /* Other thing to do ??? */
 				de = (struct ext_dir_entry *) bh->b_data;
 			}
@@ -428,7 +429,7 @@ int ext_mkdir(struct inode * dir, const char * name, int len, int mode)
 		return -ENOSPC;
 	}
 	inode->i_dirt = 1;
-	if (!(dir_block = bread(inode->i_dev,inode->i_data[0]))) {
+	if (!(dir_block = bread(inode->i_dev, inode->i_data[0], BLOCK_SIZE))) {
 		iput(dir);
 		inode->i_nlink--;
 		inode->i_dirt = 1;
@@ -481,7 +482,7 @@ static int empty_dir(struct inode * inode)
 
 /*	len = inode->i_size / sizeof (struct ext_dir_entry); */
 	if (inode->i_size < 2 * 12 || !inode->i_data[0] ||
-	    !(bh=bread(inode->i_dev,inode->i_data[0]))) {
+	    !(bh=bread(inode->i_dev, inode->i_data[0], BLOCK_SIZE))) {
 	    	printk("warning - bad directory on dev %04x\n",inode->i_dev);
 		return 0;
 	}
@@ -503,7 +504,7 @@ static int empty_dir(struct inode * inode)
 				offset += BLOCK_SIZE;
 				continue;
 			}
-			if (!(bh=bread(inode->i_dev,block)))
+			if (!(bh=bread(inode->i_dev, block, BLOCK_SIZE)))
 				return 0;
 			de = (struct ext_dir_entry *) bh->b_data;
 		}
@@ -643,7 +644,7 @@ int ext_symlink(struct inode * dir, const char * name, int len, const char * sym
 		return -ENOSPC;
 	}
 	inode->i_dirt = 1;
-	if (!(name_block = bread(inode->i_dev,inode->i_data[0]))) {
+	if (!(name_block = bread(inode->i_dev, inode->i_data[0], BLOCK_SIZE))) {
 		iput(dir);
 		inode->i_nlink--;
 		inode->i_dirt = 1;
@@ -808,6 +809,10 @@ start_up:
 		retval = 0;
 		goto end_rename;
 	}
+	if (S_ISDIR(new_inode->i_mode)) {
+		retval = -EEXIST;
+		goto end_rename;
+	}
 	if (S_ISDIR(old_inode->i_mode)) {
 		retval = -EEXIST;
 		if (new_bh)
@@ -821,7 +826,7 @@ start_up:
 		retval = -EIO;
 		if (!old_inode->i_data[0])
 			goto end_rename;
-		if (!(dir_bh = bread(old_inode->i_dev, old_inode->i_data[0])))
+		if (!(dir_bh = bread(old_inode->i_dev, old_inode->i_data[0], BLOCK_SIZE)))
 			goto end_rename;
 		if (PARENT_INO(dir_bh->b_data) != old_dir->i_ino)
 			goto end_rename;
@@ -841,8 +846,8 @@ start_up:
 /* ok, that's it */
 	old_de->inode = 0;
 	old_de->name_len = 0;
-	ext_merge_entries (old_de, pde, nde);
 	new_de->inode = old_inode->i_ino;
+	ext_merge_entries (old_de, pde, nde);
 	if (new_inode) {
 		new_inode->i_nlink--;
 		new_inode->i_dirt = 1;
@@ -881,7 +886,7 @@ end_rename:
 int ext_rename(struct inode * old_dir, const char * old_name, int old_len,
 	struct inode * new_dir, const char * new_name, int new_len)
 {
-	static struct task_struct * wait = NULL;
+	static struct wait_queue * wait = NULL;
 	static int lock = 0;
 	int result;
 

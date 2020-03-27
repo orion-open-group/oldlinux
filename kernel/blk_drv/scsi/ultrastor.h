@@ -17,36 +17,40 @@
 # define FALSE 0
 #endif
 
-/* ??? This should go eventually, once the queueing bug is fixed */
-#define USE_QUEUECOMMAND FALSE
+/* ??? This should go eventually, once I'm convinced the queueing stuff is
+   stable enough... */
+/* #define NO_QUEUEING */
 
 int ultrastor_14f_detect(int);
 const char *ultrastor_14f_info(void);
 int ultrastor_14f_queuecommand(unsigned char target, const void *cmnd,
 			       void *buff, int bufflen,
 			       void (*done)(int, int));
-#if !USE_QUEUECOMMAND
+#ifdef NO_QUEUEING
 int ultrastor_14f_command(unsigned char target, const void *cmnd,
 			  void *buff, int bufflen);
 #endif
 int ultrastor_14f_abort(int);
 int ultrastor_14f_reset(void);
 
-#if !USE_QUEUECOMMAND
-#define ULTRASTOR_14F \
-    { "UltraStor 14F", ultrastor_14f_detect, ultrastor_14f_info, \
-      ultrastor_14f_command, 0, ultrastor_14f_abort, ultrastor_14f_reset, \
-      FALSE, 0, 0 }
-#else
+#ifndef NO_QUEUEING
 #define ULTRASTOR_14F \
     { "UltraStor 14F", ultrastor_14f_detect, ultrastor_14f_info, 0, \
       ultrastor_14f_queuecommand, ultrastor_14f_abort, ultrastor_14f_reset, \
-      TRUE, 0, 0 }
+      1, 0, 0 }
+    /* ??? What should can_queue be set to?  Currently 1... */
+#else
+#define ULTRASTOR_14F \
+    { "UltraStor 14F", ultrastor_14f_detect, ultrastor_14f_info, \
+      ultrastor_14f_command, 0, ultrastor_14f_abort, ultrastor_14f_reset, \
+      0, 0, 0 }
 #endif
 
-#define UD_DETECT 0x1
-#define UD_COMMAND 0x2
-#define UD_RESET 0x4
+#define UD_ABORT 0x0001
+#define UD_COMMAND 0x0002
+#define UD_DETECT 0x0004
+#define UD_INTERRUPT 0x0008
+#define UD_RESET 0x0010
 
 #ifdef ULTRASTOR_PRIVATE
 

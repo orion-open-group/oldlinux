@@ -1,16 +1,16 @@
 /*
  *  linux/kernel/chr_drv/tty_ioctl.c
  *
- *  (C) 1991  Linus Torvalds
+ *  Copyright (C) 1991, 1992  Linus Torvalds
  */
 
-#include <errno.h>
-#include <termios.h>
-#include <sys/types.h>
-
+#include <linux/types.h>
+#include <linux/termios.h>
+#include <linux/errno.h>
 #include <linux/sched.h>
 #include <linux/kernel.h>
 #include <linux/tty.h>
+#include <linux/fcntl.h>
 
 #include <asm/io.h>
 #include <asm/segment.h>
@@ -65,7 +65,7 @@ void flush_output(struct tty_struct * tty)
 	}
 }
 
-static void wait_until_sent(struct tty_struct * tty)
+void wait_until_sent(struct tty_struct * tty)
 {
 	while (!(current->signal & ~current->blocked) && !EMPTY(tty->write_q)) {
 		TTY_WRITE_FLUSH(tty);
@@ -122,6 +122,7 @@ static int set_termios(struct tty_struct * tty, struct termios * termios,
 			int channel)
 {
 	int i;
+	unsigned short old_cflag = tty->termios.c_cflag;
 
 	/* If we try to set the state of terminal and we're not in the
 	   foreground, send a SIGTTOU.  If the signal is blocked or
@@ -135,7 +136,7 @@ static int set_termios(struct tty_struct * tty, struct termios * termios,
 	}
 	for (i=0 ; i< (sizeof (*termios)) ; i++)
 		((char *)&tty->termios)[i]=get_fs_byte(i+(char *)termios);
-	if (IS_A_SERIAL(channel))
+	if (IS_A_SERIAL(channel) && tty->termios.c_cflag != old_cflag)
 		change_speed(channel-64);
 	return 0;
 }
@@ -166,6 +167,7 @@ static int set_termio(struct tty_struct * tty, struct termio * termio,
 {
 	int i;
 	struct termio tmp_termio;
+	unsigned short old_cflag = tty->termios.c_cflag;
 
 	if ((current->tty == channel) &&
 	    (tty->pgrp > 0) &&
@@ -184,7 +186,7 @@ static int set_termio(struct tty_struct * tty, struct termio * termio,
 	tty->termios.c_line = tmp_termio.c_line;
 	for(i=0 ; i < NCC ; i++)
 		tty->termios.c_cc[i] = tmp_termio.c_cc[i];
-	if (IS_A_SERIAL(channel))
+	if (IS_A_SERIAL(channel) && tty->termios.c_cflag != old_cflag)
 		change_speed(channel-64);
 	return 0;
 }
@@ -232,12 +234,11 @@ int tty_ioctl(struct inode * inode, struct file * file,
 	int pgrp;
 	int dev;
 
-	if (MAJOR(inode->i_rdev) == 5) {
-		dev = current->tty;
-		if (dev<0)
-			return -EINVAL;
-	} else
-		dev = MINOR(inode->i_rdev);
+	if (MAJOR(file->f_rdev) != 4) {
+		printk("tty_ioctl: tty pseudo-major != 4\n");
+		return -EINVAL;
+	}
+	dev = MINOR(file->f_rdev);
 	tty = tty_table + (dev ? ((dev < 64)? dev-1:dev) : fg_console);
 
 	if (IS_A_PTY(dev))
@@ -286,11 +287,11 @@ int tty_ioctl(struct inode * inode, struct file * file,
 				return 0;
 			case TCIOFF:
 				if (STOP_CHAR(tty))
-					PUTCH(STOP_CHAR(tty),tty->write_q);
+					put_tty_queue(STOP_CHAR(tty),tty->write_q);
 				return 0;
 			case TCION:
 				if (START_CHAR(tty))
-					PUTCH(START_CHAR(tty),tty->write_q);
+					put_tty_queue(START_CHAR(tty),tty->write_q);
 				return 0;
 			}
 			return -EINVAL; /* not implemented */
@@ -390,6 +391,23 @@ int tty_ioctl(struct inode * inode, struct file * file,
 			if (!IS_A_SERIAL(dev))
 				return -EINVAL;
 			return set_serial_info(dev-64,(struct serial_struct *) arg);
+		case FIONBIO:
+			if (arg)
+				file->f_flags |= O_NONBLOCK;
+			else
+				file->f_flags &= ~O_NONBLOCK;
+			return 0;
+		case TIOCNOTTY:
+			if (MINOR(file->f_rdev) != current->tty)
+				return -EINVAL;
+			current->tty = -1;
+			if (current->leader) {
+				if (tty->pgrp > 0)
+					kill_pg(tty->pgrp, SIGHUP, 0);
+				tty->pgrp = -1;
+				tty->session = 0;
+			}
+			return 0;
 		default:
 			return vt_ioctl(tty, dev, cmd, arg);
 	}

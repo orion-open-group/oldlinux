@@ -1,7 +1,7 @@
 /*
  *  linux/kernel/fork.c
  *
- *  (C) 1991  Linus Torvalds
+ *  Copyright (C) 1991, 1992  Linus Torvalds
  */
 
 /*
@@ -10,14 +10,17 @@
  * Fork is rather simple, once you get the hang of it, but the memory
  * management can be a bitch. See 'mm/mm.c': 'copy_page_tables()'
  */
-#include <errno.h>
-#include <stddef.h>
 
+#include <linux/errno.h>
 #include <linux/sched.h>
 #include <linux/kernel.h>
 #include <linux/mm.h>
+#include <linux/stddef.h>
+
 #include <asm/segment.h>
 #include <asm/system.h>
+
+#define MAX_TASKS_PER_USER ((NR_TASKS/4)*3)
 
 long last_pid=0;
 
@@ -41,8 +44,8 @@ int copy_mem(int nr,struct task_struct * p)
 	unsigned long old_data_base,new_data_base,data_limit;
 	unsigned long old_code_base,new_code_base,code_limit;
 
-	code_limit=get_limit(0x0f);
-	data_limit=get_limit(0x17);
+	code_limit = get_limit(0x0f);
+	data_limit = get_limit(0x17);
 	old_code_base = get_base(current->ldt[1]);
 	old_data_base = get_base(current->ldt[2]);
 	if (old_data_base != old_code_base) {
@@ -66,18 +69,32 @@ int copy_mem(int nr,struct task_struct * p)
 
 static int find_empty_process(void)
 {
-	int i;
+	int i, task_nr;
+	int this_user_tasks = 0;
 
-	repeat:
-		if ((++last_pid) & 0xffff0000)
-			last_pid=1;
-		for(i=0 ; i<NR_TASKS ; i++)
-			if (task[i] && ((task[i]->pid == last_pid) ||
-				        (task[i]->pgrp == last_pid)))
-				goto repeat;
+repeat:
+	if ((++last_pid) & 0xffff0000)
+		last_pid=1;
+	for(i=0 ; i < NR_TASKS ; i++) {
+		if (!task[i])
+			continue;
+		if (task[i]->uid == current->uid)
+			this_user_tasks++;
+		if (task[i]->pid == last_pid || task[i]->pgrp == last_pid)
+			goto repeat;
+	}
+	if (this_user_tasks > MAX_TASKS_PER_USER && !suser())
+		return -EAGAIN;
+/* Only the super-user can fill the last available slot */
+	task_nr = 0;
 	for(i=1 ; i<NR_TASKS ; i++)
 		if (!task[i])
-			return i;
+			if (task_nr)
+				return task_nr;
+			else
+				task_nr = i;
+	if (task_nr && suser())
+		return task_nr;
 	return -EAGAIN;
 }
 
@@ -95,7 +112,7 @@ int sys_fork(long ebx,long ecx,long edx,
 	int i,nr;
 	struct file *f;
 
-	p = (struct task_struct *) get_free_page();
+	p = (struct task_struct *) get_free_page(GFP_KERNEL);
 	if (!p)
 		return -EAGAIN;
 	nr = find_empty_process();
@@ -105,9 +122,13 @@ int sys_fork(long ebx,long ecx,long edx,
 	}
 	task[nr] = p;
 	*p = *current;	/* NOTE! this doesn't copy the supervisor stack */
+	p->wait.task = p;
+	p->wait.next = NULL;
 	p->state = TASK_UNINTERRUPTIBLE;
 	p->flags &= ~PF_PTRACED;
 	p->pid = last_pid;
+	if (p->pid > 1)
+		p->swappable = 1;
 	p->p_pptr = p->p_opptr = current;
 	p->p_cptr = NULL;
 	SET_LINKS(p);
@@ -125,7 +146,7 @@ int sys_fork(long ebx,long ecx,long edx,
 	p->tss.esp0 = PAGE_SIZE + (long) p;
 	p->tss.ss0 = 0x10;
 	p->tss.eip = eip;
-	p->tss.eflags = eflags;
+	p->tss.eflags = eflags & 0xffffcfff;	/* iopl is always 0 for a new process */
 	p->tss.eax = 0;
 	p->tss.ecx = ecx;
 	p->tss.edx = edx;

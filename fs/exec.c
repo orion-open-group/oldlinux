@@ -1,7 +1,7 @@
 /*
  *  linux/fs/exec.c
  *
- *  (C) 1991  Linus Torvalds
+ *  Copyright (C) 1991, 1992  Linus Torvalds
  */
 
 /*
@@ -17,20 +17,20 @@
  * was less than 2 hours work to get demand-loading completely implemented.
  */
 
-#include <signal.h>
-#include <errno.h>
-#include <sys/ptrace.h>
-#include <a.out.h>
-
-#include <linux/string.h>
-#include <linux/stat.h>
-#include <linux/fcntl.h>
 #include <linux/fs.h>
 #include <linux/sched.h>
 #include <linux/kernel.h>
 #include <linux/mm.h>
+#include <linux/a.out.h>
+#include <linux/errno.h>
+#include <linux/signal.h>
+#include <linux/string.h>
+#include <linux/stat.h>
+#include <linux/fcntl.h>
+#include <linux/ptrace.h>
+#include <linux/user.h>
+
 #include <asm/segment.h>
-#include <sys/user.h>
 
 extern int sys_exit(int exit_code);
 extern int sys_close(int fd);
@@ -101,6 +101,7 @@ int core_dump(long signr, struct pt_regs * regs)
 	has_dumped = 1;
 /* write and seek example: from kernel space */
 	__asm__("mov %0,%%fs"::"r" ((unsigned short) 0x10));
+	dump.magic = CMAGIC;
 	dump.u_tsize = current->end_code / PAGE_SIZE;
 	dump.u_dsize = (current->brk - current->end_code) / PAGE_SIZE;
 	dump.u_ssize =((current->start_stack +(PAGE_SIZE-1)) / PAGE_SIZE) -
@@ -179,13 +180,17 @@ int sys_uselib(const char * library)
 		inode = NULL;
 	if (!inode)
 		return -ENOENT;
-	if (!S_ISREG(inode->i_mode) || !permission(inode,MAY_READ)) {
+	if (!inode->i_sb || !S_ISREG(inode->i_mode) || !permission(inode,MAY_READ)) {
 		iput(inode);
 		return -EACCES;
 	}
-	if (!(bh = bread(inode->i_dev,inode->i_data[0]))) {
+	if (!(bh = bread(inode->i_dev,bmap(inode,0),inode->i_sb->s_blocksize))) {
 		iput(inode);
 		return -EACCES;
+	}
+	if (!IS_RDONLY(inode)) {
+		inode->i_atime = CURRENT_TIME;
+		inode->i_dirt = 1;
 	}
 	ex = *(struct exec *) bh->b_data;
 	brelse(bh);
@@ -308,7 +313,7 @@ static unsigned long copy_strings(int argc,char ** argv,unsigned long *page,
 					set_fs(old_fs);
 				if (!(pag = (char *) page[p/PAGE_SIZE]) &&
 				    !(pag = (char *) page[p/PAGE_SIZE] =
-				      (unsigned long *) get_free_page())) 
+				      (unsigned long *) get_free_page(GFP_USER))) 
 					return 0;
 				if (from_kmem==2)
 					set_fs(new_fs);
@@ -351,13 +356,17 @@ static void read_omagic(struct inode *inode, int bytes)
 	struct buffer_head *bh;
 	int n, blkno, blk = 0;
 	char *dest = (char *) 0;
+	unsigned int block_size;
 
+	block_size = 1024;
+	if (inode->i_sb)
+		block_size = inode->i_sb->s_blocksize;
 	while (bytes > 0) {
 		if (!(blkno = bmap(inode, blk)))
 			sys_exit(-1);
-		if (!(bh = bread(inode->i_dev, blkno)))
+		if (!(bh = bread(inode->i_dev, blkno, block_size)))
 			sys_exit(-1);
-		n = (blk ? BLOCK_SIZE : BLOCK_SIZE - sizeof(struct exec));
+		n = (blk ? block_size : block_size - sizeof(struct exec));
 		if (bytes < n)
 			n = bytes;
 
@@ -406,7 +415,21 @@ restart_interp:
 		retval = -EACCES;
 		goto exec_error2;
 	}
+	if (IS_NOEXEC(inode)) { /* FS mustn't be mounted noexec */
+		retval = -EPERM;
+		goto exec_error2;
+	}
+	if (!inode->i_sb) {
+		retval = -EACCES;
+		goto exec_error2;
+	}
 	i = inode->i_mode;
+	if (IS_NOSUID(inode) && (((i & S_ISUID) && inode->i_uid != current->
+	    euid) || ((i & S_ISGID) && inode->i_gid != current->egid)) &&
+	    !suser()) {
+		retval = -EPERM;
+		goto exec_error2;
+	}
 	/* make sure we don't let suid, sgid files be ptraced. */
 	if (current->flags & PF_PTRACED) {
 		e_uid = current->euid;
@@ -424,9 +447,13 @@ restart_interp:
 		retval = -EACCES;
 		goto exec_error2;
 	}
-	if (!(bh = bread(inode->i_dev,inode->i_data[0]))) {
+	if (!(bh = bread(inode->i_dev,bmap(inode,0),inode->i_sb->s_blocksize))) {
 		retval = -EACCES;
 		goto exec_error2;
+	}
+	if (!IS_RDONLY(inode)) {
+		inode->i_atime = CURRENT_TIME;
+		inode->i_dirt = 1;
 	}
 	ex = *((struct exec *) bh->b_data);	/* read exec-header */
 	if ((bh->b_data[0] == '#') && (bh->b_data[1] == '!') && (!sh_bang)) {

@@ -1,24 +1,22 @@
 /*
  *  kernel/chr_drv/vt.c
  *
- *  (C) 1992 obz under the linux copyright
+ *  Copyright (C) 1992 obz under the linux copyright
  */
 
-#include <errno.h>
-
-#include <sys/types.h>
-#include <sys/kd.h>
-#include <sys/vt.h>
-
-#include <asm/io.h>
-#include <asm/segment.h>
-
+#include <linux/types.h>
+#include <linux/errno.h>
 #include <linux/sched.h>
 #include <linux/tty.h>
 #include <linux/timer.h>
 #include <linux/kernel.h>
 
+#include <asm/io.h>
+#include <asm/segment.h>
+
 #include "vt_kern.h"
+#include <sys/kd.h>
+#include <sys/vt.h>
 
 /*
  * console (vt and kd) routines, as defined by usl svr4 manual

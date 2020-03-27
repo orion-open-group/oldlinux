@@ -1,18 +1,18 @@
 /*
  * linux/kernel/itimer.c
  *
- * (C) 1992 Darren Senn
+ * Copyright (C) 1992 Darren Senn
  */
 
 /* These are all the functions necessary to implement itimers */
 
+#include <linux/signal.h>
 #include <linux/sched.h>
 #include <linux/string.h>
-#include <asm/segment.h>
+#include <linux/errno.h>
+#include <linux/time.h>
 
-#include <signal.h>
-#include <sys/time.h>
-#include <errno.h>
+#include <asm/segment.h>
 
 static unsigned long tvtojiffies(struct timeval *value)
 {

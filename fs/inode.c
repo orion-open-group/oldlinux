@@ -1,14 +1,14 @@
 /*
  *  linux/fs/inode.c
  *
- *  (C) 1991  Linus Torvalds
+ *  Copyright (C) 1991, 1992  Linus Torvalds
  */
 
-#include <linux/string.h>
 #include <linux/stat.h>
 #include <linux/sched.h>
 #include <linux/kernel.h>
 #include <linux/mm.h>
+#include <linux/string.h>
 
 #include <asm/system.h>
 
@@ -188,7 +188,7 @@ struct inode * get_pipe_inode(void)
 
 	if (!(inode = get_empty_inode()))
 		return NULL;
-	if (!(inode->i_size = get_free_page())) {
+	if (!(inode->i_size = get_free_page(GFP_USER))) {
 		inode->i_count = 0;
 		return NULL;
 	}
@@ -252,6 +252,7 @@ struct inode * iget(int dev,int nr)
 	}
 	inode->i_dev = dev;
 	inode->i_ino = nr;
+	inode->i_flags = inode->i_sb->s_flags;
 	read_inode(inode);
 	return inode;
 }

@@ -1,13 +1,13 @@
 /*
  *  linux/fs/ext/blkdev.c
  *
- *  (C) 1992  Remy Card (card@masi.ibp.fr)
+ *  Copyright (C) 1992  Remy Card (card@masi.ibp.fr)
  *
  *  from
  *
  *  linux/fs/minix/blkdev.c
  *
- *  (C) 1991  Linus Torvalds
+ *  Copyright (C) 1991, 1992  Linus Torvalds
  */
 
 #include <linux/sched.h>
@@ -15,8 +15,7 @@
 #include <linux/tty.h>
 #include <linux/stat.h>
 #include <linux/fcntl.h>
-
-#include <errno.h>
+#include <linux/errno.h>
 
 /*
  * Called every time an ext block special file is opened

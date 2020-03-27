@@ -1,21 +1,20 @@
 /*
  *  linux/fs/ext/dir.c
  *
- *  (C) 1992 Remy Card (card@masi.ibp.fr)
+ *  Copyright (C) 1992 Remy Card (card@masi.ibp.fr)
  *
  *  from
  *
  *  linux/fs/minix/dir.c
  *
- *  (C) 1991 Linus Torvalds
+ *  Copyright (C) 1991, 1992 Linus Torvalds
  *
  *  ext directory handling functions
  */
 
-#include <errno.h>
-
 #include <asm/segment.h>
 
+#include <linux/errno.h>
 #include <linux/fs.h>
 #include <linux/ext_fs.h>
 #include <linux/stat.h>
@@ -68,7 +67,7 @@ static int ext_readdir(struct inode * inode, struct file * filp,
 	while (filp->f_pos < inode->i_size) {
 		offset = filp->f_pos & 1023;
 		block = ext_bmap(inode,(filp->f_pos)>>BLOCK_SIZE_BITS);
-		if (!block || !(bh = bread(inode->i_dev,block))) {
+		if (!block || !(bh = bread(inode->i_dev, block, BLOCK_SIZE))) {
 			filp->f_pos += 1024-offset;
 			continue;
 		}

@@ -26,8 +26,9 @@ struct request {
 	int errors;
 	unsigned long sector;
 	unsigned long nr_sectors;
+	unsigned long current_nr_sectors;
 	char * buffer;
-	struct task_struct * waiting;
+	struct wait_queue * waiting;
 	struct buffer_head * bh;
 	struct buffer_head * bhtail;
 	struct request * next;
@@ -39,7 +40,7 @@ struct request {
  * are much more time-critical than writes.
  */
 #define IN_ORDER(s1,s2) \
-((s1)->cmd<(s2)->cmd || ((s1)->cmd==(s2)->cmd && \
+((s1)->cmd < (s2)->cmd || ((s1)->cmd == (s2)->cmd && \
 ((s1)->dev < (s2)->dev || (((s1)->dev == (s2)->dev && \
 (s1)->sector < (s2)->sector)))))
 
@@ -48,12 +49,35 @@ struct blk_dev_struct {
 	struct request * current_request;
 };
 
+
+struct sec_size {
+	unsigned block_size;
+	unsigned block_size_bits;
+};
+
+/*
+ * These will have to be changed to be aware of different buffer
+ * sizes etc..
+ */
+#define SECTOR_MASK ((1 << (BLOCK_SIZE_BITS - 9)) -1)
+#define SUBSECTOR(block) ((block) & SECTOR_MASK)
+
+extern struct sec_size * blk_sec[NR_BLK_DEV];
 extern struct blk_dev_struct blk_dev[NR_BLK_DEV];
 extern struct request request[NR_REQUEST];
-extern struct task_struct * wait_for_request;
+extern struct wait_queue * wait_for_request;
 
 extern int * blk_size[NR_BLK_DEV];
 
+extern int is_read_only(int dev);
+extern void set_device_ro(int dev,int flag);
+
+#define RO_IOCTLS(dev,where) \
+  case BLKROSET: if (!suser()) return -EPERM; \
+		 set_device_ro((dev),get_fs_long((long *) (where))); return 0; \
+  case BLKROGET: verify_area((void *) (where), sizeof(long)); \
+		 put_fs_long(is_read_only(dev),(long *) (where)); return 0;
+		 
 #ifdef MAJOR_NR
 
 /*
@@ -93,6 +117,7 @@ extern int * blk_size[NR_BLK_DEV];
 /* scsi disk */
 #define DEVICE_NAME "scsidisk"
 #define DEVICE_INTR do_sd  
+#define TIMEOUT_VALUE 200
 #define DEVICE_REQUEST do_sd_request
 #define DEVICE_NR(device) (MINOR(device) >> 4)
 #define DEVICE_ON(device)
@@ -113,7 +138,10 @@ extern int * blk_size[NR_BLK_DEV];
 
 #endif
 
+#ifndef CURRENT
 #define CURRENT (blk_dev[MAJOR_NR].current_request)
+#endif
+
 #define CURRENT_DEV DEVICE_NR(CURRENT->dev)
 
 #ifdef DEVICE_INTR
@@ -160,18 +188,20 @@ static void end_request(int uptodate)
 		printk(DEVICE_NAME " I/O error\n\r");
 		printk("dev %04x, sector %d\n\r",req->dev,req->sector);
 		req->nr_sectors--;
-		req->nr_sectors &= ~1;
-		req->sector += 2;
-		req->sector &= ~1;		
+		req->nr_sectors &= ~SECTOR_MASK;
+		req->sector += (BLOCK_SIZE / 512);
+		req->sector &= ~SECTOR_MASK;		
 	}
+
 	if (bh = req->bh) {
 		req->bh = bh->b_reqnext;
 		bh->b_reqnext = NULL;
 		bh->b_uptodate = uptodate;
 		unlock_buffer(bh);
 		if (bh = req->bh) {
-			if (req->nr_sectors < 2) {
-				req->nr_sectors = 2;
+			req->current_nr_sectors = bh->b_size >> 9;
+			if (req->nr_sectors < req->current_nr_sectors) {
+				req->nr_sectors = req->current_nr_sectors;
 				printk("end_request: buffer-list destroyed\n");
 			}
 			req->buffer = bh->b_data;
@@ -192,7 +222,6 @@ static void end_request(int uptodate)
 #endif
 
 #define INIT_REQUEST \
-repeat: \
 	if (!CURRENT) {\
 		CLEAR_INTR; \
 		return; \

@@ -1,13 +1,13 @@
 /*
  *  linux/fs/ext/truncate.c
  *
- *  (C) 1992  Remy Card (card@masi.ibp.fr)
+ *  Copyright (C) 1992  Remy Card (card@masi.ibp.fr)
  *
  *  from
  *
  *  linux/fs/minix/truncate.c
  *
- *  (C) 1991  Linus Torvalds
+ *  Copyright (C) 1991, 1992  Linus Torvalds
  */
 
 #include <linux/sched.h>
@@ -15,8 +15,7 @@
 #include <linux/tty.h>
 #include <linux/stat.h>
 #include <linux/fcntl.h>
-
-#include <errno.h>
+#include <linux/errno.h>
 
 /*
  * Truncate has the most races in the whole filesystem: coding it is
@@ -59,7 +58,7 @@ static int trunc_indirect(struct inode * inode, int offset, unsigned long * p)
 #define INDIRECT_BLOCK (DIRECT_BLOCK-offset)
 
 	if (*p)
-		bh = bread(inode->i_dev,*p);
+		bh = bread(inode->i_dev, *p, BLOCK_SIZE);
 	if (!bh)
 		return 0;
 repeat:
@@ -88,16 +87,16 @@ repeat:
 	return result;
 }
 		
-static int trunc_dindirect(struct inode * inode)
+static int trunc_dindirect(struct inode * inode, int offset, unsigned long * p)
 {
 	int i;
 	struct buffer_head * bh = NULL;
 	unsigned long * dind;
 	int result = 0;
-#define DINDIRECT_BLOCK ((DIRECT_BLOCK-(256+9))>>8)
+#define DINDIRECT_BLOCK ((DIRECT_BLOCK-offset)>>8)
 
-	if (inode->i_data[10])
-		bh = bread(inode->i_dev,inode->i_data[10]);
+	if (*p)
+		bh = bread(inode->i_dev, *p, BLOCK_SIZE);
 	if (!bh)
 		return 0;
 repeat:
@@ -109,7 +108,7 @@ repeat:
 		dind = i+(unsigned long *) bh->b_data;
 		if (!*dind)
 			continue;
-		result |= trunc_indirect(inode,9+256+(i<<8),dind);
+		result |= trunc_indirect(inode,offset+(i<<8),dind);
 	}
 	dind = (unsigned long *) bh->b_data;
 	for (i = 0; i < 256; i++)
@@ -118,8 +117,44 @@ repeat:
 	brelse(bh);
 	if (i >= 256) {
 		result = 1;
-		if (ext_free_block(inode->i_dev,inode->i_data[10]))
-			inode->i_data[10] = 0;
+		if (ext_free_block(inode->i_dev,*p))
+			*p = 0;
+	}
+	return result;
+}
+
+static int trunc_tindirect(struct inode * inode)
+{
+	int i;
+	struct buffer_head * bh = NULL;
+	unsigned long * tind;
+	int result = 0;
+#define TINDIRECT_BLOCK ((DIRECT_BLOCK-(256*256+256+9))>>16)
+
+	if (inode->i_data[11])
+		bh = bread(inode->i_dev, inode->i_data[11], BLOCK_SIZE);
+	if (!bh)
+		return 0;
+repeat:
+	for (i = TINDIRECT_BLOCK ; i < 256 ; i ++) {
+		if (i < 0)
+			i = 0;
+		if (i < TINDIRECT_BLOCK)
+			goto repeat;
+		tind = i+(unsigned long *) bh->b_data;
+		if (!*tind)
+			continue;
+		result |= trunc_dindirect(inode,9+256+256*256+(i<<16),tind);
+	}
+	tind = (unsigned long *) bh->b_data;
+	for (i = 0; i < 256; i++)
+		if (*(tind++))
+			break;
+	brelse(bh);
+	if (i >= 256) {
+		result = 1;
+		if (ext_free_block(inode->i_dev,inode->i_data[11]))
+			inode->i_data[11] = 0;
 	}
 	return result;
 }
@@ -136,7 +171,8 @@ void ext_truncate(struct inode * inode)
 	while (1) {
 		flag = trunc_direct(inode);
 		flag |= trunc_indirect(inode,9,(unsigned long *)&inode->i_data[9]);
-		flag |= trunc_dindirect(inode);
+		flag |= trunc_dindirect(inode,9+256,(unsigned long *)&inode->i_data[10]);
+		flag |= trunc_tindirect(inode);
 		if (!flag)
 			break;
 		current->counter = 0;

@@ -1,16 +1,16 @@
 /*
  * linux/kernel/math/ea.c
  *
- * (C) 1991 Linus Torvalds
+ * Copyright (C) 1991, 1992 Linus Torvalds
  */
 
 /*
  * Calculate the effective address.
  */
 
-#include <stddef.h>
-
+#include <linux/stddef.h>
 #include <linux/math_emu.h>
+
 #include <asm/segment.h>
 
 static int __regoffset[] = {

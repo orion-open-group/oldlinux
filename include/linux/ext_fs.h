@@ -1,11 +1,9 @@
-/*
- * The ext filesystem constants/structures
- */
-
 #ifndef _EXT_FS_H
 #define _EXT_FS_H
 
-#include <sys/types.h>
+/*
+ * The ext filesystem constants/structures
+ */
 
 /*
  * Free blocks/inodes management style

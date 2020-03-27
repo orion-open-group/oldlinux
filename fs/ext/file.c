@@ -1,28 +1,25 @@
 /*
  *  linux/fs/ext/file.c
  *
- *  (C) 1992 Remy Card (card@masi.ibp.fr)
+ *  Copyright (C) 1992 Remy Card (card@masi.ibp.fr)
  *
  *  from
  *
  *  linux/fs/minix/file.c
  *
- *  (C) 1991 Linus Torvalds
+ *  Copyright (C) 1991, 1992 Linus Torvalds
  *
  *  ext regular file handling primitives
  */
 
-#include <errno.h>
-
-#include <sys/dirent.h>
-
 #include <asm/segment.h>
 #include <asm/system.h>
 
-#include <linux/fcntl.h>
 #include <linux/sched.h>
 #include <linux/ext_fs.h>
 #include <linux/kernel.h>
+#include <linux/errno.h>
+#include <linux/fcntl.h>
 #include <linux/stat.h>
 
 #define	NBUF	16
@@ -108,7 +105,7 @@ static int ext_file_read(struct inode * inode, struct file * filp, char * buf, i
 		if (blocks) {
 			--blocks;
 			if (nr = ext_bmap(inode,block++)) {
-				*bhb = getblk(inode->i_dev,nr);
+				*bhb = getblk(inode->i_dev, nr, BLOCK_SIZE);
 				if (!(*bhb)->b_uptodate)
 					ll_rw_block(READ,*bhb);
 			} else
@@ -153,8 +150,10 @@ static int ext_file_read(struct inode * inode, struct file * filp, char * buf, i
 	} while (left > 0);
 	if (!read)
 		return -EIO;
-	inode->i_atime = CURRENT_TIME;
-	inode->i_dirt = 1;
+	if (!IS_RDONLY(inode)) {
+		inode->i_atime = CURRENT_TIME;
+		inode->i_dirt = 1;
+	}
 	return read;
 }
 
@@ -192,9 +191,9 @@ static int ext_file_write(struct inode * inode, struct file * filp, char * buf, 
 		if (c > count-written)
 			c = count-written;
 		if (c == BLOCK_SIZE)
-			bh = getblk(inode->i_dev, block);
+			bh = getblk(inode->i_dev, block, BLOCK_SIZE);
 		else
-			bh = bread(inode->i_dev,block);
+			bh = bread(inode->i_dev, block, BLOCK_SIZE);
 		if (!bh) {
 			if (!written)
 				written = -EIO;

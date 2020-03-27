@@ -1,11 +1,10 @@
 /*
  *  linux/fs/stat.c
  *
- *  (C) 1991  Linus Torvalds
+ *  Copyright (C) 1991, 1992  Linus Torvalds
  */
 
-#include <errno.h>
-
+#include <linux/errno.h>
 #include <linux/stat.h>
 #include <linux/fs.h>
 #include <linux/sched.h>

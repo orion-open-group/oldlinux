@@ -1,16 +1,17 @@
-/* $Id: aha1542.c,v 1.1 1992/04/24 18:01:50 root Exp root $
+/* $Id: aha1542.c,v 1.1 1992/07/24 06:27:38 root Exp root $
  *  linux/kernel/aha1542.c
  *
- *  (C) 1992  Tommy Thorn
+ *  Copyright (C) 1992  Tommy Thorn
  */
 
 #include <linux/config.h>
 #include <linux/kernel.h>
 #include <linux/head.h>
+#include <linux/types.h>
 #include <linux/string.h>
+
 #include <asm/system.h>
 #include <asm/io.h>
-#include <sys/types.h>
 #include "scsi.h"
 #include "hosts.h"
 
@@ -22,7 +23,7 @@
 #endif
 
 /*
-static const char RCSid[] = "$Header: /usr/src/linux/kernel/blk_drv/scsi/RCS/aha1542.c,v 1.1 1992/04/24 18:01:50 root Exp root $";
+static const char RCSid[] = "$Header: /usr/src/linux/kernel/blk_drv/scsi/RCS/aha1542.c,v 1.1 1992/07/24 06:27:38 root Exp root $";
 */
 
 #define base 0x330
@@ -33,7 +34,8 @@ static struct ccb ccb;
 
 long WAITtimeout, WAITnexttimeout = 3000000;
 
-void (*do_done)() = NULL;
+void (*do_done)(int, int) = NULL;
+int aha1542_host = 0;
 extern void aha1542_interrupt();
 
 #define aha1542_intr_reset()  outb(IRST, CONTROL)
@@ -53,9 +55,8 @@ extern void aha1542_interrupt();
 
 static void aha1542_stat(void)
 {
-    int s = inb(STATUS), i = inb(INTRFLAGS);
-/*  printk("status = %x, intrflags = %x served %d last %x timeout %d\n", s, i, intr_flag, intr_last, WAITtimeout); */
-    printk("status=%x intrflags=%x\n", s, i, WAITnexttimeout-WAITtimeout);
+/*    int s = inb(STATUS), i = inb(INTRFLAGS);
+  printk("status=%x intrflags=%x\n", s, i, WAITnexttimeout-WAITtimeout); */
 }
 
 static int aha1542_out(unchar *cmdp, int len)
@@ -194,8 +195,7 @@ char *aha1542_info(void)
 /* A "high" level interrupt handler */
 void aha1542_intr_handle(void)
 {
-    int flag = inb(INTRFLAGS);
-    void (*my_done)() = do_done;
+    void (*my_done)(int, int) = do_done;
     int errstatus;
 
     do_done = NULL;
@@ -220,7 +220,7 @@ void aha1542_intr_handle(void)
 	
     if (!mb[1].status) {
 	DEB(printk("aha1542_intr_handle: strange: mbif but no mail!\n"));
-	my_done(DID_TIME_OUT << 16);
+	my_done(aha1542_host, DID_TIME_OUT << 16);
 	return;
     }
 
@@ -247,17 +247,17 @@ void aha1542_intr_handle(void)
 */
     }
     DEB(if (errstatus) printk("aha1542_intr_handle: returning %6x\n", errstatus));
-    my_done(errstatus);
+    my_done(aha1542_host, errstatus);
     return;
 }
 
-int aha1542_queuecommand(unchar target, const void *cmnd, void *buff, int bufflen, void (*done)(int))
+int aha1542_queuecommand(unchar target, const void *cmnd, void *buff, int bufflen, void (*done)(int, int))
 {
     unchar ahacmd = CMD_START_SCSI;
-    int i;
     unchar *cmd = (unchar *) cmnd;
+    DEB(int i);
 
-    DEB(if (target > 1) {done(DID_TIME_OUT << 16); return 0;});
+    DEB(if (target > 1) {done(aha1542_host, DID_TIME_OUT << 16); return 0;});
     
 #ifdef DEBUG
     if (*cmd == READ_10 || *cmd == WRITE_10)
@@ -317,7 +317,7 @@ int aha1542_queuecommand(unchar target, const void *cmnd, void *buff, int buffle
 
 volatile static int internal_done_flag = 0;
 volatile static int internal_done_errcode = 0;
-static void internal_done(int errcode)
+static void internal_done(int host, int errcode)
 {
     internal_done_errcode = errcode;
     ++internal_done_flag;
@@ -359,7 +359,7 @@ void call_buh()
 }
 
 /* return non-zero on detection */
-int aha1542_detect(int hostnum) /* hostnum ignored for now */
+int aha1542_detect(int hostnum)
 {
     int i;
 
@@ -434,6 +434,7 @@ int aha1542_detect(int hostnum) /* hostnum ignored for now */
 	  aha1542_command(0, cmd, buffer, 512);
       }
 #endif
+    aha1542_host = hostnum;
     return 1;
 }
 

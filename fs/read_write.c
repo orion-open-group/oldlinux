@@ -1,17 +1,16 @@
 /*
  *  linux/fs/read_write.c
  *
- *  (C) 1991  Linus Torvalds
+ *  Copyright (C) 1991, 1992  Linus Torvalds
  */
 
-#include <errno.h>
-#include <sys/types.h>
-#include <sys/dirent.h>
-
+#include <linux/types.h>
+#include <linux/errno.h>
 #include <linux/stat.h>
 #include <linux/kernel.h>
 #include <linux/sched.h>
 #include <linux/minix_fs.h>
+
 #include <asm/segment.h>
 
 /*

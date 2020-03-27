@@ -1,11 +1,9 @@
-/*
- * The minix filesystem constants/structures
- */
-
 #ifndef _MINIX_FS_H
 #define _MINIX_FS_H
 
-#include <sys/types.h>
+/*
+ * The minix filesystem constants/structures
+ */
 
 #define MINIX_NAME_LEN 14
 #define MINIX_ROOT_INO 1
@@ -27,6 +25,9 @@ struct minix_inode {
 	unsigned short i_zone[9];
 };
 
+/*
+ * minix super-block data on disk
+ */
 struct minix_super_block {
 	unsigned short s_ninodes;
 	unsigned short s_nzones;

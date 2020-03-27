@@ -1,7 +1,7 @@
 /*
  * linux/kernel/math/emulate.c
  *
- * (C) 1991 Linus Torvalds
+ * Copyright (C) 1991, 1992 Linus Torvalds
  */
 
 /*
@@ -32,7 +32,7 @@
 
 #ifdef KERNEL_MATH_EMULATION
 
-#include <signal.h>
+#include <linux/signal.h>
 
 #define __ALIGNED_TEMP_REAL 1
 #include <linux/math_emu.h>
@@ -537,7 +537,7 @@ static temp_real_unaligned * __st(int i)
 
 #else /* no math emulation */
 
-#include <signal.h>
+#include <linux/signal.h>
 #include <linux/sched.h>
 
 void math_emulate(long ___false)

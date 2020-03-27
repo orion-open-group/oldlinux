@@ -1,18 +1,16 @@
 /*
  *  linux/init/main.c
  *
- *  (C) 1991  Linus Torvalds
+ *  Copyright (C) 1991, 1992  Linus Torvalds
  */
 
-#include <stddef.h>
 #include <stdarg.h>
 #include <time.h>
-
-#include <sys/types.h>
 
 #include <asm/system.h>
 #include <asm/io.h>
 
+#include <linux/types.h>
 #include <linux/fcntl.h>
 #include <linux/config.h>
 #include <linux/sched.h>
@@ -53,12 +51,12 @@ static char printbuf[1024];
 
 extern int vsprintf();
 extern void init(void);
+extern void init_IRQ(void);
 extern long blk_dev_init(long,long);
 extern long chr_dev_init(long,long);
 extern void hd_init(void);
 extern void floppy_init(void);
 extern void sock_init(void);
-extern void mem_init(long start, long end);
 extern long rd_init(long mem_start, int length);
 extern long kernel_mktime(struct tm * tm);
 
@@ -81,9 +79,8 @@ static int sprintf(char * str, const char *fmt, ...)
  * This is set up by the setup-routine at boot-time
  */
 #define EXT_MEM_K (*(unsigned short *)0x90002)
-#define CON_ROWS ((*(unsigned short *)0x9000e) & 0xff)
-#define CON_COLS (((*(unsigned short *)0x9000e) & 0xff00) >> 8)
 #define DRIVE_INFO (*(struct drive_info *)0x90080)
+#define SCREEN_INFO (*(struct screen_info *)0x90000)
 #define ORIG_ROOT_DEV (*(unsigned short *)0x901FC)
 
 /*
@@ -122,9 +119,9 @@ static void time_init(void)
 	startup_time = kernel_mktime(&time);
 }
 
-static long memory_end = 0;
-static long buffer_memory_end = 0;
-static long main_memory_start = 0;
+static unsigned long memory_start = 0;
+static unsigned long memory_end = 0;
+
 static char term[32];
 
 static char * argv_init[] = { "/bin/init", NULL };
@@ -137,6 +134,7 @@ static char * argv[] = { "-/bin/sh",NULL };
 static char * envp[] = { "HOME=/usr/root", NULL, NULL };
 
 struct drive_info { char dummy[32]; } drive_info;
+struct screen_info screen_info;
 
 void start_kernel(void)
 {
@@ -145,32 +143,26 @@ void start_kernel(void)
  * enable them
  */
  	ROOT_DEV = ORIG_ROOT_DEV;
-	sprintf(term, "TERM=con%dx%d", CON_COLS, CON_ROWS);
+ 	drive_info = DRIVE_INFO;
+ 	screen_info = SCREEN_INFO;
+	sprintf(term, "TERM=con%dx%d", ORIG_VIDEO_COLS, ORIG_VIDEO_LINES);
 	envp[1] = term;	
 	envp_rc[1] = term;
 	envp_init[1] = term;
- 	drive_info = DRIVE_INFO;
 	memory_end = (1<<20) + (EXT_MEM_K<<10);
 	memory_end &= 0xfffff000;
 	if (memory_end > 16*1024*1024)
 		memory_end = 16*1024*1024;
-	if (memory_end >= 12*1024*1024) 
-		buffer_memory_end = 4*1024*1024;
-	else if (memory_end >= 6*1024*1024)
-		buffer_memory_end = 2*1024*1024;
-	else if (memory_end >= 4*1024*1024)
-		buffer_memory_end = 3*512*1024;
-	else
-		buffer_memory_end = 1*1024*1024;
-	main_memory_start = buffer_memory_end;
+	memory_start = 1024*1024;
 	trap_init();
+	init_IRQ();
 	sched_init();
-	main_memory_start = chr_dev_init(main_memory_start,memory_end);
-	main_memory_start = blk_dev_init(main_memory_start,memory_end);
-	mem_init(main_memory_start,memory_end);
+	memory_start = chr_dev_init(memory_start,memory_end);
+	memory_start = blk_dev_init(memory_start,memory_end);
+	memory_start = mem_init(memory_start,memory_end);
+	buffer_init();
 	time_init();
 	printk("Linux version " UTS_RELEASE " " __DATE__ " " __TIME__ "\n");
-	buffer_init(buffer_memory_end);
 	hd_init();
 	floppy_init();
 	sock_init();
@@ -183,14 +175,16 @@ void start_kernel(void)
 		init();
 	}
 /*
- *   NOTE!!   For any other task 'pause()' would mean we have to get a
- * signal to awaken, but task0 is the sole exception (see 'schedule()')
- * as task 0 gets activated at every idle moment (when no other tasks
- * can run). For task0 'pause()' just means we go check if some other
- * task can run, and if not we return here.
+ * task[0] is meant to be used as an "idle" task: it may not sleep, but
+ * it might do some general things like count free pages or it could be
+ * used to implement a reasonable LRU algorithm for the paging routines:
+ * anything that can be useful, but shouldn't take time from the real
+ * processes.
+ *
+ * Right now task[0] just does a infinite loop in user mode.
  */
 	for(;;)
-		__asm__("int $0x80"::"a" (__NR_pause):"ax");
+		/* nothing */ ;
 }
 
 static int printf(const char *fmt, ...)
@@ -212,9 +206,9 @@ void init(void)
 	(void) open("/dev/tty1",O_RDWR,0);
 	(void) dup(0);
 	(void) dup(0);
-	printf("%d buffers = %d bytes buffer space\n\r",NR_BUFFERS,
-		NR_BUFFERS*BLOCK_SIZE);
-	printf("Free mem: %d bytes\n\r",memory_end-main_memory_start);
+	printf("%d buffers = %d bytes buffer space\n\r",nr_buffers,
+		nr_buffers*BLOCK_SIZE);
+	printf("Free mem: %d bytes\n\r",memory_end-memory_start);
 
 	execve("/etc/init",argv_init,envp_init);
 	execve("/bin/init",argv_init,envp_init);

@@ -9,7 +9,6 @@
  */
 
 #include <linux/sched.h>
-#define __LP_C__
 #include <linux/lp.h>
 
 static int lp_reset(int minor)

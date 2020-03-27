@@ -1,21 +1,20 @@
 /*
  *  linux/fs/ext/symlink.c
  *
- *  (C) 1992 Remy Card (card@masi.ibp.fr)
+ *  Copyright (C) 1992 Remy Card (card@masi.ibp.fr)
  *
  *  from
  *
  *  linux/fs/minix/symlink.c
  *
- *  (C) 1991 Linus Torvalds
+ *  Copyright (C) 1991, 1992  Linus Torvalds
  *
  *  ext symlink handling code
  */
 
-#include <errno.h>
-
 #include <asm/segment.h>
 
+#include <linux/errno.h>
 #include <linux/sched.h>
 #include <linux/fs.h>
 #include <linux/ext_fs.h>
@@ -63,7 +62,7 @@ static struct inode * ext_follow_link(struct inode * dir, struct inode * inode)
 	}
 	__asm__("mov %%fs,%0":"=r" (fs));
 	if ((current->link_count > 5) || !inode->i_data[0] ||
-	   !(bh = bread(inode->i_dev, inode->i_data[0]))) {
+	   !(bh = bread(inode->i_dev, inode->i_data[0], BLOCK_SIZE))) {
 		iput(dir);
 		iput(inode);
 		return NULL;
@@ -91,7 +90,7 @@ static int ext_readlink(struct inode * inode, char * buffer, int buflen)
 	if (buflen > 1023)
 		buflen = 1023;
 	if (inode->i_data[0])
-		bh = bread(inode->i_dev, inode->i_data[0]);
+		bh = bread(inode->i_dev, inode->i_data[0], BLOCK_SIZE);
 	else
 		bh = NULL;
 	iput(inode);
