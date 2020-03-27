@@ -1,4 +1,27 @@
-/*
+head	1.1;
+access;
+symbols;
+locks
+	tytso:1.1; strict;
+comment	@ * @;
+
+
+1.1
+date	92.01.16.06.38.58;	author tytso;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/*
  *  linux/kernel/hd.c
  *
  *  (C) 1991  Linus Torvalds
@@ -35,7 +58,6 @@ inb_p(0x71); \
 #define MAX_HD		2
 
 static void recal_intr(void);
-static void bad_rw_intr(void);
 
 static int recalibrate = 0;
 static int reset = 0;
@@ -234,33 +256,16 @@ static void reset_controller(void)
 		printk("HD-controller reset failed: %02x\n\r",i);
 }
 
-static void reset_hd(void)
+static void reset_hd(int nr)
 {
-	static int i;
-
-repeat:
-	if (reset) {
-		reset = 0;
-		i = -1;
-		reset_controller();
-	} else if (win_result()) {
-		bad_rw_intr();
-		if (reset)
-			goto repeat;
-	}
-	i++;
-	if (i < NR_HD) {
-		hd_out(i,hd_info[i].sect,hd_info[i].sect,hd_info[i].head-1,
-			hd_info[i].cyl,WIN_SPECIFY,&reset_hd);
-	} else
-		do_hd_request();
+	reset_controller();
+	hd_out(nr,hd_info[nr].sect,hd_info[nr].sect,hd_info[nr].head-1,
+		hd_info[nr].cyl,WIN_SPECIFY,&recal_intr);
 }
 
 void unexpected_hd_interrupt(void)
 {
 	printk("Unexpected HD interrupt\n\r");
-	reset = 1;
-	do_hd_request();
 }
 
 static void bad_rw_intr(void)
@@ -317,11 +322,7 @@ static void recal_intr(void)
 
 void hd_times_out(void)
 {
-	if (!CURRENT)
-		return;
 	printk("HD timeout");
-	if (++CURRENT->errors >= MAX_ERRORS)
-		end_request(0);
 	SET_INTR(NULL);
 	reset = 1;
 	do_hd_request();
@@ -350,8 +351,9 @@ void do_hd_request(void)
 	sec++;
 	nsect = CURRENT->nr_sectors;
 	if (reset) {
+		reset = 0;
 		recalibrate = 1;
-		reset_hd();
+		reset_hd(CURRENT_DEV);
 		return;
 	}
 	if (recalibrate) {
@@ -382,3 +384,4 @@ void hd_init(void)
 	outb_p(inb_p(0x21)&0xfb,0x21);
 	outb(inb_p(0xA1)&0xbf,0xA1);
 }
+@
